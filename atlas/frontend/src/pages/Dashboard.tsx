@@ -1,5 +1,10 @@
 import { useState } from "react";
 
+import Header from "../components/Header";
+import Greeting from "../components/Greeting";
+import TaskList from "../components/TaskList";
+import AddTask from "../components/AddTask";
+
 export default function Dashboard() {
   const [tasks, setTasks] = useState([
     "Study React",
@@ -7,27 +12,18 @@ export default function Dashboard() {
     "Build Atlas",
   ]);
 
-  function addTask() {
-    const task = prompt("Enter a new task");
-
-    if (task && task.trim() !== "") {
-      setTasks([...tasks, task]);
-    }
-  }
-
   return (
-    <div style={{ padding: "30px" }}>
-      <h1>Today's Tasks</h1>
+    <div>
+      <Header />
 
-      <ul>
-        {tasks.map((task, index) => (
-          <li key={index}>{task}</li>
-        ))}
-      </ul>
+      <Greeting />
 
-      <button onClick={addTask}>
-        + Add Task
-      </button>
+      <TaskList tasks={tasks} />
+
+      <AddTask
+        tasks={tasks}
+        setTasks={setTasks}
+      />
     </div>
   );
 }
