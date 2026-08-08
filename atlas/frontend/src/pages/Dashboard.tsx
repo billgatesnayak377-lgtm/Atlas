@@ -48,6 +48,13 @@ export default function Dashboard() {
     );
   }
 
+  // Delete a task
+  function deleteTask(taskId: number) {
+    setTasks(
+      tasks.filter((task) => task.id !== taskId)
+    );
+  }
+
   // Add a new task
   function addTask(title: string) {
     const newTask = {
@@ -86,6 +93,7 @@ export default function Dashboard() {
               title={task.title}
               completed={task.completed}
               onToggle={() => toggleTask(task.id)}
+              onDelete={() => deleteTask(task.id)}
             />
           ))}
         </div>
