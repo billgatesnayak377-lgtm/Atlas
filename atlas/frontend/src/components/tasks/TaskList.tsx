@@ -1,14 +1,32 @@
 import TaskCard from "./TaskCard";
 
-type Props = {
-  tasks: string[];
+type Task = {
+  id: number;
+  title: string;
+  completed: boolean;
 };
 
-export default function TaskList({ tasks }: Props) {
+type TaskListProps = {
+  tasks: Task[];
+  onToggle: (taskId: number) => void;
+  onDelete: (taskId: number) => void;
+};
+
+export default function TaskList({
+  tasks,
+  onToggle,
+  onDelete,
+}: TaskListProps) {
   return (
-    <div style={{ marginTop: "20px" }}>
-      {tasks.map((task, index) => (
-        <TaskCard key={index} task={task} />
+    <div className="mt-5 space-y-3">
+      {tasks.map((task) => (
+        <TaskCard
+          key={task.id}
+          title={task.title}
+          completed={task.completed}
+          onToggle={() => onToggle(task.id)}
+          onDelete={() => onDelete(task.id)}
+        />
       ))}
     </div>
   );
