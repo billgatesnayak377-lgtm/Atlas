@@ -1,27 +1,47 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DashboardCard from "../components/layout/DashboardCard";
 import TaskCard from "../components/tasks/TaskCard";
 import AddTask from "../components/tasks/AddTask";
 import ProgressBar from "../components/ui/ProgressBar";
 
+type Task = {
+  id: number;
+  title: string;
+  completed: boolean;
+};
+
 export default function Dashboard() {
-  const [tasks, setTasks] = useState([
-    {
-      id: 1,
-      title: "Study React",
-      completed: true,
-    },
-    {
-      id: 2,
-      title: "Go to Gym",
-      completed: false,
-    },
-    {
-      id: 3,
-      title: "Build Atlas",
-      completed: false,
-    },
-  ]);
+  // Load tasks from Local Storage when Atlas starts
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    const savedTasks = localStorage.getItem("atlas-tasks");
+
+    if (savedTasks) {
+      return JSON.parse(savedTasks);
+    }
+
+    return [
+      {
+        id: 1,
+        title: "Study React",
+        completed: true,
+      },
+      {
+        id: 2,
+        title: "Go to Gym",
+        completed: false,
+      },
+      {
+        id: 3,
+        title: "Build Atlas",
+        completed: false,
+      },
+    ];
+  });
+
+  // Save tasks whenever they change
+  useEffect(() => {
+    localStorage.setItem("atlas-tasks", JSON.stringify(tasks));
+  }, [tasks]);
 
   // Calculate completed tasks
   const completedTasks = tasks.filter(
@@ -57,7 +77,7 @@ export default function Dashboard() {
 
   // Add a new task
   function addTask(title: string) {
-    const newTask = {
+    const newTask: Task = {
       id: Date.now(),
       title: title,
       completed: false,
