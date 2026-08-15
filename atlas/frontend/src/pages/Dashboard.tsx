@@ -19,12 +19,16 @@ export default function Dashboard() {
     const savedTasks = localStorage.getItem("atlas-tasks");
 
     if (savedTasks) {
-      const parsedTasks = JSON.parse(savedTasks);
+      try {
+        const parsedTasks = JSON.parse(savedTasks);
 
-      return parsedTasks.map((task: Task) => ({
-        ...task,
-        priority: task.priority ?? "medium",
-      }));
+        return parsedTasks.map((task: Task) => ({
+          ...task,
+          priority: task.priority ?? "medium",
+        }));
+      } catch {
+        console.error("Could not load saved tasks.");
+      }
     }
 
     return [
@@ -52,6 +56,9 @@ export default function Dashboard() {
     ];
   });
 
+  const [smartTask, setSmartTask] = useState("");
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
   // Save tasks whenever they change
   useEffect(() => {
     localStorage.setItem(
@@ -75,8 +82,8 @@ export default function Dashboard() {
 
   // Complete / uncomplete task
   function toggleTask(taskId: number) {
-    setTasks(
-      tasks.map((task) =>
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
         task.id === taskId
           ? {
               ...task,
@@ -89,22 +96,27 @@ export default function Dashboard() {
 
   // Delete task
   function deleteTask(taskId: number) {
-    setTasks(
-      tasks.filter((task) => task.id !== taskId)
+    setTasks((currentTasks) =>
+      currentTasks.filter(
+        (task) => task.id !== taskId
+      )
     );
   }
 
-  // Add task
+  // Normal add task
   function addTask(title: string) {
     const newTask: Task = {
       id: Date.now(),
-      title: title,
+      title: title.trim(),
       completed: false,
       priority: "medium",
       dueDate: undefined,
     };
 
-    setTasks([...tasks, newTask]);
+    setTasks((currentTasks) => [
+      ...currentTasks,
+      newTask,
+    ]);
   }
 
   // Edit task title
@@ -129,8 +141,8 @@ export default function Dashboard() {
       return;
     }
 
-    setTasks(
-      tasks.map((task) =>
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
         task.id === taskId
           ? {
               ...task,
@@ -146,8 +158,8 @@ export default function Dashboard() {
     taskId: number,
     priority: Priority
   ) {
-    setTasks(
-      tasks.map((task) =>
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
         task.id === taskId
           ? {
               ...task,
@@ -163,8 +175,8 @@ export default function Dashboard() {
     taskId: number,
     dueDate: string
   ) {
-    setTasks(
-      tasks.map((task) =>
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
         task.id === taskId
           ? {
               ...task,
@@ -175,20 +187,187 @@ export default function Dashboard() {
     );
   }
 
+  // AI Task Assistant
+  async function createSmartTask() {
+    const input = smartTask.trim();
+
+    if (!input || isAiLoading) {
+      return;
+    }
+
+    setIsAiLoading(true);
+
+    try {
+      const response = await fetch(
+        "/api/task-assistant",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            input,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            "Atlas could not understand the task."
+        );
+      }
+
+      if (
+        typeof data.title !== "string" ||
+        !data.title.trim()
+      ) {
+        throw new Error(
+          "Atlas returned an invalid task."
+        );
+      }
+
+      const validPriorities: Priority[] = [
+        "high",
+        "medium",
+        "low",
+      ];
+
+      const priority: Priority =
+        validPriorities.includes(data.priority)
+          ? data.priority
+          : "medium";
+
+      const newTask: Task = {
+        id: Date.now(),
+        title: data.title.trim(),
+        completed: false,
+        priority,
+        dueDate:
+          typeof data.dueDate === "string"
+            ? data.dueDate
+            : undefined,
+      };
+
+      setTasks((currentTasks) => [
+        ...currentTasks,
+        newTask,
+      ]);
+
+      setSmartTask("");
+    } catch (error) {
+      console.error(
+        "Atlas Task Assistant error:",
+        error
+      );
+
+      window.alert(
+        "Atlas couldn't understand that task. Please try again."
+      );
+    } finally {
+      setIsAiLoading(false);
+    }
+  }
+
+  // Dynamic greeting
+  const currentHour = new Date().getHours();
+
+  let greeting = "Good Evening";
+
+  if (currentHour < 12) {
+    greeting = "Good Morning";
+  } else if (currentHour < 17) {
+    greeting = "Good Afternoon";
+  }
+
+  // Dynamic current date
+  const currentDate = new Date().toLocaleDateString(
+    "en-IN",
+    {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    }
+  );
+
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
       <DashboardCard>
 
         {/* Greeting */}
         <h1 className="text-4xl font-bold text-sky-400">
-          👋 Good Evening, Bill
+          👋 {greeting}, Bill
         </h1>
 
         <p className="text-slate-400 mt-2">
-          Friday • 7 August
+          {currentDate}
         </p>
 
         <div className="border-t border-slate-700 my-6"></div>
+
+        {/* AI Task Assistant */}
+        <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5 mb-6">
+
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">
+              🧠
+            </span>
+
+            <div>
+              <h2 className="text-xl font-semibold text-white">
+                Atlas Task Assistant
+              </h2>
+
+              <p className="text-sm text-slate-400">
+                Tell Atlas what you need to do.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-4">
+
+            <input
+              type="text"
+              value={smartTask}
+              onChange={(event) =>
+                setSmartTask(event.target.value)
+              }
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !isAiLoading
+                ) {
+                  createSmartTask();
+                }
+              }}
+              disabled={isAiLoading}
+              placeholder="e.g. Finish Atlas tomorrow, high priority"
+              className="flex-1 rounded-xl bg-slate-900 text-white px-4 py-3 border border-slate-700 focus:outline-none focus:border-sky-500 disabled:opacity-50"
+            />
+
+            <button
+              onClick={createSmartTask}
+              disabled={
+                isAiLoading ||
+                smartTask.trim() === ""
+              }
+              className="rounded-xl bg-sky-500 hover:bg-sky-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-950 font-semibold px-5 transition"
+            >
+              {isAiLoading
+                ? "Thinking..."
+                : "Add"}
+            </button>
+
+          </div>
+
+          <p className="text-xs text-slate-500 mt-3">
+            Try: "Finish my BESS report next Friday,
+            make it urgent"
+          </p>
+
+        </div>
 
         {/* Today's Focus */}
         <h2 className="text-2xl font-semibold text-white">
@@ -197,6 +376,7 @@ export default function Dashboard() {
 
         {/* Tasks */}
         <div className="mt-5 space-y-4">
+
           {tasks.map((task) => (
             <div key={task.id}>
 
@@ -218,9 +398,13 @@ export default function Dashboard() {
 
               {/* Priority */}
               <div className="flex gap-2 mt-2 ml-2">
+
                 <button
                   onClick={() =>
-                    changePriority(task.id, "high")
+                    changePriority(
+                      task.id,
+                      "high"
+                    )
                   }
                   className={`text-xs px-3 py-1 rounded-lg transition ${
                     task.priority === "high"
@@ -233,7 +417,10 @@ export default function Dashboard() {
 
                 <button
                   onClick={() =>
-                    changePriority(task.id, "medium")
+                    changePriority(
+                      task.id,
+                      "medium"
+                    )
                   }
                   className={`text-xs px-3 py-1 rounded-lg transition ${
                     task.priority === "medium"
@@ -246,7 +433,10 @@ export default function Dashboard() {
 
                 <button
                   onClick={() =>
-                    changePriority(task.id, "low")
+                    changePriority(
+                      task.id,
+                      "low"
+                    )
                   }
                   className={`text-xs px-3 py-1 rounded-lg transition ${
                     task.priority === "low"
@@ -256,10 +446,12 @@ export default function Dashboard() {
                 >
                   🟢 Low
                 </button>
+
               </div>
 
               {/* Due Date */}
               <div className="flex items-center gap-3 mt-2 ml-2">
+
                 <label className="text-xs text-slate-400">
                   📅 Due:
                 </label>
@@ -275,20 +467,26 @@ export default function Dashboard() {
                   }
                   className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
                 />
+
               </div>
 
             </div>
           ))}
+
         </div>
 
         {/* Progress */}
         <div className="mt-6">
-          <ProgressBar progress={progress} />
+          <ProgressBar
+            progress={progress}
+          />
         </div>
 
-        {/* Add Task */}
+        {/* Normal Add Task */}
         <div className="mt-5">
-          <AddTask onAddTask={addTask} />
+          <AddTask
+            onAddTask={addTask}
+          />
         </div>
 
       </DashboardCard>
