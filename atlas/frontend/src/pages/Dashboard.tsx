@@ -14,6 +14,15 @@ type Task = {
   dueDate?: string;
 };
 
+type PlannedTask = {
+  id: number;
+  title: string;
+  priority: Priority;
+  dueDate: string | null;
+  reason: string;
+  suggestedOrder: number;
+};
+
 export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>(() => {
     const savedTasks = localStorage.getItem("atlas-tasks");
@@ -59,6 +68,19 @@ export default function Dashboard() {
   const [smartTask, setSmartTask] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
 
+  const [isPlannerLoading, setIsPlannerLoading] =
+    useState(false);
+
+  const [dailyPlan, setDailyPlan] = useState<
+    PlannedTask[]
+  >([]);
+
+  const [plannerSummary, setPlannerSummary] =
+    useState("");
+
+  const [showPlanner, setShowPlanner] =
+    useState(false);
+
   // Save tasks whenever they change
   useEffect(() => {
     localStorage.setItem(
@@ -103,11 +125,17 @@ export default function Dashboard() {
     );
   }
 
-  // Normal add task
+  // Add normal task
   function addTask(title: string) {
+    const trimmedTitle = title.trim();
+
+    if (!trimmedTitle) {
+      return;
+    }
+
     const newTask: Task = {
       id: Date.now(),
-      title: title.trim(),
+      title: trimmedTitle,
       completed: false,
       priority: "medium",
       dueDate: undefined,
@@ -119,7 +147,7 @@ export default function Dashboard() {
     ]);
   }
 
-  // Edit task title
+  // Edit task
   function editTask(taskId: number) {
     const task = tasks.find(
       (task) => task.id === taskId
@@ -180,7 +208,7 @@ export default function Dashboard() {
         task.id === taskId
           ? {
               ...task,
-              dueDate,
+              dueDate: dueDate || undefined,
             }
           : task
       )
@@ -271,8 +299,107 @@ export default function Dashboard() {
     }
   }
 
+  // Smart Daily Planner
+  async function planMyDay() {
+    if (isPlannerLoading) {
+      return;
+    }
+
+    const activeTasks = tasks.filter(
+      (task) => !task.completed
+    );
+
+    if (activeTasks.length === 0) {
+      window.alert(
+        "You have no unfinished tasks to plan."
+      );
+      return;
+    }
+
+    setIsPlannerLoading(true);
+
+    try {
+      const response = await fetch(
+        "/api/daily-planner",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            tasks: activeTasks,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            "Atlas could not create your plan."
+        );
+      }
+
+      if (!Array.isArray(data.plan)) {
+        throw new Error(
+          "Invalid planner response."
+        );
+      }
+
+      const validIds = new Set(
+        activeTasks.map((task) => task.id)
+      );
+
+      const cleanedPlan: PlannedTask[] =
+        data.plan
+          .filter((task: PlannedTask) =>
+            validIds.has(task.id)
+          )
+          .sort(
+            (
+              a: PlannedTask,
+              b: PlannedTask
+            ) =>
+              a.suggestedOrder -
+              b.suggestedOrder
+          )
+          .map(
+            (
+              task: PlannedTask,
+              index: number
+            ) => ({
+              ...task,
+              suggestedOrder: index + 1,
+            })
+          );
+
+      setDailyPlan(cleanedPlan);
+
+      setPlannerSummary(
+        typeof data.summary === "string"
+          ? data.summary
+          : "Here is your recommended order for today."
+      );
+
+      setShowPlanner(true);
+    } catch (error) {
+      console.error(
+        "Atlas planner error:",
+        error
+      );
+
+      window.alert(
+        "Atlas couldn't create your daily plan. Please try again."
+      );
+    } finally {
+      setIsPlannerLoading(false);
+    }
+  }
+
   // Dynamic greeting
-  const currentHour = new Date().getHours();
+  const currentHour =
+    new Date().getHours();
 
   let greeting = "Good Evening";
 
@@ -282,18 +409,20 @@ export default function Dashboard() {
     greeting = "Good Afternoon";
   }
 
-  // Dynamic current date
-  const currentDate = new Date().toLocaleDateString(
-    "en-IN",
-    {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    }
-  );
+  // Dynamic date
+  const currentDate =
+    new Date().toLocaleDateString(
+      "en-IN",
+      {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+      }
+    );
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
+
       <DashboardCard>
 
         {/* Greeting */}
@@ -305,12 +434,13 @@ export default function Dashboard() {
           {currentDate}
         </p>
 
-        <div className="border-t border-slate-700 my-6"></div>
+        <div className="border-t border-slate-700 my-6" />
 
         {/* AI Task Assistant */}
         <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5 mb-6">
 
           <div className="flex items-center gap-2">
+
             <span className="text-2xl">
               🧠
             </span>
@@ -324,6 +454,7 @@ export default function Dashboard() {
                 Tell Atlas what you need to do.
               </p>
             </div>
+
           </div>
 
           <div className="flex gap-3 mt-4">
@@ -332,7 +463,9 @@ export default function Dashboard() {
               type="text"
               value={smartTask}
               onChange={(event) =>
-                setSmartTask(event.target.value)
+                setSmartTask(
+                  event.target.value
+                )
               }
               onKeyDown={(event) => {
                 if (
@@ -370,14 +503,120 @@ export default function Dashboard() {
         </div>
 
         {/* Today's Focus */}
-        <h2 className="text-2xl font-semibold text-white">
-          🎯 Today's Focus
-        </h2>
+        <div className="flex items-center justify-between gap-4">
+
+          <h2 className="text-2xl font-semibold text-white">
+            🎯 Today's Focus
+          </h2>
+
+          <button
+            onClick={planMyDay}
+            disabled={isPlannerLoading}
+            className="px-4 py-2 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 disabled:opacity-50 transition whitespace-nowrap"
+          >
+            {isPlannerLoading
+              ? "Planning..."
+              : "🧠 Plan My Day"}
+          </button>
+
+        </div>
+
+        {/* Daily Planner Result */}
+        {showPlanner && (
+          <div className="mt-5 rounded-2xl border border-purple-500/30 bg-purple-500/5 p-5">
+
+            <div className="flex items-center justify-between">
+
+              <div>
+                <h3 className="text-xl font-semibold text-purple-300">
+                  🧠 Your Daily Plan
+                </h3>
+
+                <p className="text-sm text-slate-400 mt-1">
+                  {plannerSummary}
+                </p>
+              </div>
+
+              <button
+                onClick={() =>
+                  setShowPlanner(false)
+                }
+                className="text-slate-500 hover:text-white text-xl"
+                aria-label="Close daily plan"
+              >
+                ×
+              </button>
+
+            </div>
+
+            <div className="mt-5 space-y-3">
+
+              {dailyPlan.map((task) => (
+
+                <div
+                  key={task.id}
+                  className="rounded-xl bg-slate-900/80 border border-slate-800 p-4"
+                >
+
+                  <div className="flex items-start gap-3">
+
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center font-semibold">
+                      {task.suggestedOrder}
+                    </div>
+
+                    <div className="flex-1">
+
+                      <div className="flex items-center justify-between gap-3">
+
+                        <h4 className="text-white font-medium">
+                          {task.title}
+                        </h4>
+
+                        <span
+                          className={`text-xs px-2 py-1 rounded-lg ${
+                            task.priority ===
+                            "high"
+                              ? "bg-red-500/20 text-red-400"
+                              : task.priority ===
+                                "medium"
+                              ? "bg-yellow-500/20 text-yellow-400"
+                              : "bg-green-500/20 text-green-400"
+                          }`}
+                        >
+                          {task.priority}
+                        </span>
+
+                      </div>
+
+                      {task.dueDate && (
+                        <p className="text-xs text-slate-500 mt-1">
+                          📅 Due:{" "}
+                          {task.dueDate}
+                        </p>
+                      )}
+
+                      <p className="text-sm text-slate-400 mt-2">
+                        {task.reason}
+                      </p>
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </div>
+        )}
 
         {/* Tasks */}
         <div className="mt-5 space-y-4">
 
           {tasks.map((task) => (
+
             <div key={task.id}>
 
               <TaskCard
@@ -423,7 +662,8 @@ export default function Dashboard() {
                     )
                   }
                   className={`text-xs px-3 py-1 rounded-lg transition ${
-                    task.priority === "medium"
+                    task.priority ===
+                    "medium"
                       ? "bg-yellow-500/30 text-yellow-400"
                       : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                   }`}
@@ -458,7 +698,9 @@ export default function Dashboard() {
 
                 <input
                   type="date"
-                  value={task.dueDate ?? ""}
+                  value={
+                    task.dueDate ?? ""
+                  }
                   onChange={(event) =>
                     changeDueDate(
                       task.id,
@@ -471,6 +713,7 @@ export default function Dashboard() {
               </div>
 
             </div>
+
           ))}
 
         </div>
@@ -490,6 +733,7 @@ export default function Dashboard() {
         </div>
 
       </DashboardCard>
+
     </div>
   );
 }
