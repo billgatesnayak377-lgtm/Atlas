@@ -3,6 +3,7 @@ import DashboardCard from "../components/layout/DashboardCard";
 import TaskCard from "../components/tasks/TaskCard";
 import AddTask from "../components/tasks/AddTask";
 import ProgressBar from "../components/ui/ProgressBar";
+import FocusMode from "../components/focus/FocusMode";
 
 type Priority = "high" | "medium" | "low";
 
@@ -25,18 +26,26 @@ type PlannedTask = {
 
 export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>(() => {
-    const savedTasks = localStorage.getItem("atlas-tasks");
+    const savedTasks =
+      localStorage.getItem("atlas-tasks");
 
     if (savedTasks) {
       try {
-        const parsedTasks = JSON.parse(savedTasks);
+        const parsedTasks = JSON.parse(
+          savedTasks
+        );
 
-        return parsedTasks.map((task: Task) => ({
-          ...task,
-          priority: task.priority ?? "medium",
-        }));
+        return parsedTasks.map(
+          (task: Task) => ({
+            ...task,
+            priority:
+              task.priority ?? "medium",
+          })
+        );
       } catch {
-        console.error("Could not load saved tasks.");
+        console.error(
+          "Could not load saved tasks."
+        );
       }
     }
 
@@ -65,15 +74,17 @@ export default function Dashboard() {
     ];
   });
 
-  const [smartTask, setSmartTask] = useState("");
-  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [smartTask, setSmartTask] =
+    useState("");
+
+  const [isAiLoading, setIsAiLoading] =
+    useState(false);
 
   const [isPlannerLoading, setIsPlannerLoading] =
     useState(false);
 
-  const [dailyPlan, setDailyPlan] = useState<
-    PlannedTask[]
-  >([]);
+  const [dailyPlan, setDailyPlan] =
+    useState<PlannedTask[]>([]);
 
   const [plannerSummary, setPlannerSummary] =
     useState("");
@@ -81,7 +92,11 @@ export default function Dashboard() {
   const [showPlanner, setShowPlanner] =
     useState(false);
 
-  // Save tasks whenever they change
+  // Focus Mode
+  const [focusTaskId, setFocusTaskId] =
+    useState<number | null>(null);
+
+  // Save tasks
   useEffect(() => {
     localStorage.setItem(
       "atlas-tasks",
@@ -89,12 +104,11 @@ export default function Dashboard() {
     );
   }, [tasks]);
 
-  // Calculate completed tasks
+  // Progress
   const completedTasks = tasks.filter(
     (task) => task.completed
   ).length;
 
-  // Calculate progress
   const progress =
     tasks.length === 0
       ? 0
@@ -102,7 +116,15 @@ export default function Dashboard() {
           (completedTasks / tasks.length) * 100
         );
 
-  // Complete / uncomplete task
+  // Current focus task
+  const focusTask =
+    focusTaskId === null
+      ? null
+      : tasks.find(
+          (task) => task.id === focusTaskId
+        ) ?? null;
+
+  // Complete task
   function toggleTask(taskId: number) {
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
@@ -120,6 +142,16 @@ export default function Dashboard() {
   function deleteTask(taskId: number) {
     setTasks((currentTasks) =>
       currentTasks.filter(
+        (task) => task.id !== taskId
+      )
+    );
+
+    if (focusTaskId === taskId) {
+      setFocusTaskId(null);
+    }
+
+    setDailyPlan((currentPlan) =>
+      currentPlan.filter(
         (task) => task.id !== taskId
       )
     );
@@ -150,7 +182,7 @@ export default function Dashboard() {
   // Edit task
   function editTask(taskId: number) {
     const task = tasks.find(
-      (task) => task.id === taskId
+      (item) => item.id === taskId
     );
 
     if (!task) {
@@ -170,13 +202,24 @@ export default function Dashboard() {
     }
 
     setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === taskId
+      currentTasks.map((item) =>
+        item.id === taskId
           ? {
-              ...task,
+              ...item,
               title: newTitle.trim(),
             }
-          : task
+          : item
+      )
+    );
+
+    setDailyPlan((currentPlan) =>
+      currentPlan.map((item) =>
+        item.id === taskId
+          ? {
+              ...item,
+              title: newTitle.trim(),
+            }
+          : item
       )
     );
   }
@@ -208,7 +251,8 @@ export default function Dashboard() {
         task.id === taskId
           ? {
               ...task,
-              dueDate: dueDate || undefined,
+              dueDate:
+                dueDate || undefined,
             }
           : task
       )
@@ -231,7 +275,8 @@ export default function Dashboard() {
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
           body: JSON.stringify({
             input,
@@ -264,7 +309,9 @@ export default function Dashboard() {
       ];
 
       const priority: Priority =
-        validPriorities.includes(data.priority)
+        validPriorities.includes(
+          data.priority
+        )
           ? data.priority
           : "medium";
 
@@ -274,7 +321,8 @@ export default function Dashboard() {
         completed: false,
         priority,
         dueDate:
-          typeof data.dueDate === "string"
+          typeof data.dueDate ===
+          "string"
             ? data.dueDate
             : undefined,
       };
@@ -324,7 +372,8 @@ export default function Dashboard() {
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
           body: JSON.stringify({
             tasks: activeTasks,
@@ -348,13 +397,16 @@ export default function Dashboard() {
       }
 
       const validIds = new Set(
-        activeTasks.map((task) => task.id)
+        activeTasks.map(
+          (task) => task.id
+        )
       );
 
       const cleanedPlan: PlannedTask[] =
         data.plan
-          .filter((task: PlannedTask) =>
-            validIds.has(task.id)
+          .filter(
+            (task: PlannedTask) =>
+              validIds.has(task.id)
           )
           .sort(
             (
@@ -370,14 +422,16 @@ export default function Dashboard() {
               index: number
             ) => ({
               ...task,
-              suggestedOrder: index + 1,
+              suggestedOrder:
+                index + 1,
             })
           );
 
       setDailyPlan(cleanedPlan);
 
       setPlannerSummary(
-        typeof data.summary === "string"
+        typeof data.summary ===
+          "string"
           ? data.summary
           : "Here is your recommended order for today."
       );
@@ -397,7 +451,31 @@ export default function Dashboard() {
     }
   }
 
-  // Dynamic greeting
+  // Complete from Focus Mode
+  function completeFocusTask(
+    taskId: number
+  ) {
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              completed: true,
+            }
+          : task
+      )
+    );
+
+    setDailyPlan((currentPlan) =>
+      currentPlan.filter(
+        (task) => task.id !== taskId
+      )
+    );
+
+    setFocusTaskId(null);
+  }
+
+  // Greeting
   const currentHour =
     new Date().getHours();
 
@@ -409,7 +487,7 @@ export default function Dashboard() {
     greeting = "Good Afternoon";
   }
 
-  // Dynamic date
+  // Date
   const currentDate =
     new Date().toLocaleDateString(
       "en-IN",
@@ -496,8 +574,8 @@ export default function Dashboard() {
           </div>
 
           <p className="text-xs text-slate-500 mt-3">
-            Try: "Finish my BESS report next Friday,
-            make it urgent"
+            Try: "Finish my BESS report
+            next Friday, make it urgent"
           </p>
 
         </div>
@@ -521,7 +599,7 @@ export default function Dashboard() {
 
         </div>
 
-        {/* Daily Planner Result */}
+        {/* Daily Planner */}
         {showPlanner && (
           <div className="mt-5 rounded-2xl border border-purple-500/30 bg-purple-500/5 p-5">
 
@@ -599,6 +677,18 @@ export default function Dashboard() {
                         {task.reason}
                       </p>
 
+                      {/* Start Focus */}
+                      <button
+                        onClick={() =>
+                          setFocusTaskId(
+                            task.id
+                          )
+                        }
+                        className="mt-3 px-4 py-2 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition text-sm"
+                      >
+                        🎯 Start Focus
+                      </button>
+
                     </div>
 
                   </div>
@@ -612,7 +702,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Tasks */}
+        {/* Task List */}
         <div className="mt-5 space-y-4">
 
           {tasks.map((task) => (
@@ -725,7 +815,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Normal Add Task */}
+        {/* Add Task */}
         <div className="mt-5">
           <AddTask
             onAddTask={addTask}
@@ -733,6 +823,17 @@ export default function Dashboard() {
         </div>
 
       </DashboardCard>
+
+      {/* Focus Mode */}
+      {focusTask && (
+        <FocusMode
+          task={focusTask}
+          onComplete={completeFocusTask}
+          onClose={() =>
+            setFocusTaskId(null)
+          }
+        />
+      )}
 
     </div>
   );
