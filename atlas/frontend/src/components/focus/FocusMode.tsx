@@ -6,6 +6,7 @@ type FocusTask = {
   id: number;
   title: string;
   priority: Priority;
+  duration: number;
   dueDate?: string | null;
 };
 
@@ -15,45 +16,7 @@ type FocusModeProps = {
   onClose: () => void;
 };
 
-const DEFAULT_DURATION_MINUTES = 30;
-
-function getTaskDurationMinutes(
-  title: string
-): number {
-  const text = title.toLowerCase();
-
-  const hoursMatch = text.match(
-    /(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/
-  );
-
-  if (hoursMatch) {
-    const hours = Number(hoursMatch[1]);
-
-    if (hours > 0) {
-      return Math.round(hours * 60);
-    }
-  }
-
-  const minutesMatch = text.match(
-    /(\d+)\s*(?:minutes?|mins?|m)\b/
-  );
-
-  if (minutesMatch) {
-    const minutes = Number(
-      minutesMatch[1]
-    );
-
-    if (minutes > 0) {
-      return minutes;
-    }
-  }
-
-  return DEFAULT_DURATION_MINUTES;
-}
-
-function formatTime(
-  totalSeconds: number
-): string {
+function formatTime(totalSeconds: number): string {
   const hours = Math.floor(
     totalSeconds / 3600
   );
@@ -62,8 +25,7 @@ function formatTime(
     (totalSeconds % 3600) / 60
   );
 
-  const seconds =
-    totalSeconds % 60;
+  const seconds = totalSeconds % 60;
 
   if (hours > 0) {
     return `${String(hours).padStart(
@@ -87,21 +49,48 @@ function formatTime(
   )}`;
 }
 
+function formatDuration(
+  minutes: number
+): string {
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(
+    minutes / 60
+  );
+
+  const remainingMinutes =
+    minutes % 60;
+
+  if (remainingMinutes === 0) {
+    return `${hours} hr${
+      hours === 1 ? "" : "s"
+    }`;
+  }
+
+  return `${hours}h ${remainingMinutes}m`;
+}
+
 function FocusModeContent({
   task,
-  durationMinutes,
-  initialDuration,
   onComplete,
   onClose,
 }: {
   task: FocusTask;
-  durationMinutes: number;
-  initialDuration: number;
   onComplete: (taskId: number) => void;
   onClose: () => void;
 }) {
+  const safeDuration = Math.min(
+    Math.max(
+      Math.round(task.duration || 30),
+      5
+    ),
+    1440
+  );
+
   const [secondsLeft, setSecondsLeft] =
-    useState(initialDuration);
+    useState(safeDuration * 60);
 
   const [isRunning, setIsRunning] =
     useState(false);
@@ -111,21 +100,26 @@ function FocusModeContent({
 
   const [editHours, setEditHours] =
     useState(
-      Math.floor(durationMinutes / 60)
+      Math.floor(safeDuration / 60)
     );
 
   const [editMinutes, setEditMinutes] =
     useState(
-      durationMinutes % 60
+      safeDuration % 60
     );
 
   useEffect(() => {
-    const duration =
-      getTaskDurationMinutes(
-        task.title
-      );
+    const duration = Math.min(
+      Math.max(
+        Math.round(task.duration || 30),
+        5
+      ),
+      1440
+    );
 
-    setSecondsLeft(duration * 60);
+    setSecondsLeft(
+      duration * 60
+    );
 
     setEditHours(
       Math.floor(duration / 60)
@@ -137,7 +131,7 @@ function FocusModeContent({
 
     setIsRunning(false);
     setIsEditingTime(false);
-  }, [task.id, task.title]);
+  }, [task.id, task.duration]);
 
   useEffect(() => {
     if (!isRunning) {
@@ -162,10 +156,13 @@ function FocusModeContent({
   }, [isRunning]);
 
   function resetTimer() {
-    const duration =
-      getTaskDurationMinutes(
-        task.title
-      );
+    const duration = Math.min(
+      Math.max(
+        Math.round(task.duration || 30),
+        5
+      ),
+      1440
+    );
 
     setIsRunning(false);
 
@@ -303,8 +300,7 @@ function FocusModeContent({
                     ]
                   }`}
                 >
-                  {task.priority ===
-                  "high"
+                  {task.priority === "high"
                     ? "🔴 High"
                     : task.priority ===
                       "medium"
@@ -321,7 +317,9 @@ function FocusModeContent({
 
                 <span className="text-xs px-3 py-1 rounded-lg bg-purple-500/10 text-purple-300 border border-purple-500/20">
                   ⏱️ Planned:{" "}
-                  {durationMinutes} min
+                  {formatDuration(
+                    safeDuration
+                  )}
                 </span>
 
               </div>
@@ -340,8 +338,8 @@ function FocusModeContent({
           </p>
 
           <p className="text-slate-500 text-sm text-center mt-1">
-            Atlas automatically estimated
-            the focus time from your task.
+            Atlas is using the duration
+            saved with this task.
           </p>
 
         </div>
@@ -509,18 +507,9 @@ export default function FocusMode({
     return null;
   }
 
-  const durationMinutes =
-    getTaskDurationMinutes(
-      task.title
-    );
-
   return (
     <FocusModeContent
       task={task}
-      durationMinutes={durationMinutes}
-      initialDuration={
-        durationMinutes * 60
-      }
       onComplete={onComplete}
       onClose={onClose}
     />

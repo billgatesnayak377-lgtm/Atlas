@@ -6,9 +6,19 @@ import type {
 
 type Priority = "high" | "medium" | "low";
 
+type Category =
+  | "work"
+  | "study"
+  | "health"
+  | "personal"
+  | "finance"
+  | "other";
+
 type AtlasTask = {
   title: string;
   priority: Priority;
+  duration: number;
+  category: Category;
   dueDate: string | null;
 };
 
@@ -18,15 +28,25 @@ type AtlasTask = {
 
 function formatDate(date: Date): string {
   const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, "0");
+  const day = String(
+    date.getDate()
+  ).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
 
-function addDays(date: Date, days: number): Date {
+function addDays(
+  date: Date,
+  days: number
+): Date {
   const result = new Date(date);
-  result.setDate(result.getDate() + days);
+  result.setDate(
+    result.getDate() + days
+  );
+
   return result;
 }
 
@@ -35,12 +55,6 @@ function getDeterministicDueDate(
   today: Date
 ): string | null | undefined {
   const text = input.toLowerCase().trim();
-
-  /*
-    undefined = no recognized date phrase
-    null      = explicitly no date
-    string    = calculated date
-  */
 
   if (
     /\b(no due date|no deadline|without deadline)\b/i.test(
@@ -55,14 +69,20 @@ function getDeterministicDueDate(
     return formatDate(today);
   }
 
-  // Tomorrow
-  if (/\btomorrow\b/i.test(text)) {
-    return formatDate(addDays(today, 1));
+  // Day after tomorrow
+  if (
+    /\bday after tomorrow\b/i.test(text)
+  ) {
+    return formatDate(
+      addDays(today, 2)
+    );
   }
 
-  // Day after tomorrow
-  if (/\bday after tomorrow\b/i.test(text)) {
-    return formatDate(addDays(today, 2));
+  // Tomorrow
+  if (/\btomorrow\b/i.test(text)) {
+    return formatDate(
+      addDays(today, 1)
+    );
   }
 
   // In X days
@@ -71,15 +91,25 @@ function getDeterministicDueDate(
   );
 
   if (inDaysMatch) {
-    const days = Number(inDaysMatch[1]);
+    const days = Number(
+      inDaysMatch[1]
+    );
 
-    if (days >= 0 && days <= 365) {
-      return formatDate(addDays(today, days));
+    if (
+      days >= 0 &&
+      days <= 365
+    ) {
+      return formatDate(
+        addDays(today, days)
+      );
     }
   }
 
-  // In one/two/three/... days
-  const wordNumbers: Record<string, number> = {
+  // In one/two/three/etc. days
+  const wordNumbers: Record<
+    string,
+    number
+  > = {
     one: 1,
     two: 2,
     three: 3,
@@ -89,9 +119,10 @@ function getDeterministicDueDate(
     seven: 7,
   };
 
-  const inWordDaysMatch = text.match(
-    /\bin\s+(one|two|three|four|five|six|seven)\s+days?\b/i
-  );
+  const inWordDaysMatch =
+    text.match(
+      /\bin\s+(one|two|three|four|five|six|seven)\s+days?\b/i
+    );
 
   if (inWordDaysMatch) {
     return formatDate(
@@ -104,8 +135,11 @@ function getDeterministicDueDate(
     );
   }
 
-  // Day names
-  const weekdays: Record<string, number> = {
+  // Weekdays
+  const weekdays: Record<
+    string,
+    number
+  > = {
     sunday: 0,
     monday: 1,
     tuesday: 2,
@@ -115,32 +149,26 @@ function getDeterministicDueDate(
     saturday: 6,
   };
 
-  /*
-    "this Friday"
-    "next Friday"
-
-    Important:
-    "next Friday" means the next occurrence after today.
-    If today is Wednesday 19 Aug 2026,
-    next Friday = 21 Aug 2026.
-  */
-
-  for (const [dayName, targetDay] of Object.entries(
-    weekdays
-  )) {
-    const dayPattern = new RegExp(
-      `\\b(?:this|next)\\s+${dayName}\\b`,
-      "i"
-    );
+  for (const [
+    dayName,
+    targetDay,
+  ] of Object.entries(weekdays)) {
+    const dayPattern =
+      new RegExp(
+        `\\b(?:this|next)\\s+${dayName}\\b`,
+        "i"
+      );
 
     if (dayPattern.test(text)) {
-      const currentDay = today.getDay();
+      const currentDay =
+        today.getDay();
 
       let difference =
-        (targetDay - currentDay + 7) % 7;
+        (targetDay -
+          currentDay +
+          7) %
+        7;
 
-      // If today itself is the requested weekday,
-      // "next" means one week later.
       if (
         difference === 0 ||
         new RegExp(
@@ -154,30 +182,110 @@ function getDeterministicDueDate(
       }
 
       return formatDate(
-        addDays(today, difference)
+        addDays(
+          today,
+          difference
+        )
       );
     }
   }
 
-  // This weekend → Saturday
-  if (/\bthis weekend\b/i.test(text)) {
-    const currentDay = today.getDay();
+  // This weekend
+  if (
+    /\bthis weekend\b/i.test(text)
+  ) {
+    const currentDay =
+      today.getDay();
 
     let daysUntilSaturday =
-      (6 - currentDay + 7) % 7;
+      (6 -
+        currentDay +
+        7) %
+      7;
 
-    if (daysUntilSaturday === 0) {
+    if (
+      daysUntilSaturday === 0
+    ) {
       daysUntilSaturday = 7;
     }
 
     return formatDate(
-      addDays(today, daysUntilSaturday)
+      addDays(
+        today,
+        daysUntilSaturday
+      )
     );
   }
 
-  // Next week → same weekday next week
-  if (/\bnext week\b/i.test(text)) {
-    return formatDate(addDays(today, 7));
+  // Next week
+  if (
+    /\bnext week\b/i.test(text)
+  ) {
+    return formatDate(
+      addDays(today, 7)
+    );
+  }
+
+  return undefined;
+}
+
+/* -------------------------------------------------------
+   Duration helper
+------------------------------------------------------- */
+
+function getDeterministicDuration(
+  input: string
+): number | undefined {
+  const text = input.toLowerCase();
+
+  // Example:
+  // "for 2 hours"
+  // "2 hours"
+  // "for 1.5 hrs"
+
+  const hoursMatch =
+    text.match(
+      /(?:for\s+)?(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i
+    );
+
+  if (hoursMatch) {
+    const hours = Number(
+      hoursMatch[1]
+    );
+
+    if (
+      Number.isFinite(hours) &&
+      hours > 0 &&
+      hours <= 24
+    ) {
+      return Math.round(
+        hours * 60
+      );
+    }
+  }
+
+  // Example:
+  // "for 30 minutes"
+  // "30 mins"
+  // "for 90 min"
+
+  const minutesMatch =
+    text.match(
+      /(?:for\s+)?(\d+)\s*(?:minutes?|mins?|min|m)\b/i
+    );
+
+  if (minutesMatch) {
+    const minutes = Number(
+      minutesMatch[1]
+    );
+
+    if (
+      Number.isFinite(minutes) &&
+      minutes > 0 &&
+      minutes <= 1440
+    ) {
+      return minutes;
+    }
   }
 
   return undefined;
@@ -191,7 +299,6 @@ export default async function handler(
   req: VercelRequest,
   res: VercelResponse
 ) {
-  // Only POST
   if (req.method !== "POST") {
     return res.status(405).json({
       error: "Method not allowed",
@@ -214,10 +321,12 @@ export default async function handler(
       });
     }
 
-    const userInput = req.body?.input;
+    const userInput =
+      req.body?.input;
 
     if (
-      typeof userInput !== "string" ||
+      typeof userInput !==
+        "string" ||
       userInput.trim() === ""
     ) {
       return res.status(400).json({
@@ -229,16 +338,18 @@ export default async function handler(
     const today = new Date();
 
     const todayString =
-      today.toLocaleDateString("en-IN", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      });
+      today.toLocaleDateString(
+        "en-IN",
+        {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        }
+      );
 
     /*
-      Calculate obvious relative dates ourselves.
-      This prevents Gemini from interpreting dates incorrectly.
+      Calculate dates ourselves.
     */
     const deterministicDueDate =
       getDeterministicDueDate(
@@ -246,9 +357,23 @@ export default async function handler(
         today
       );
 
+    /*
+      Calculate duration ourselves when
+      the user explicitly gives one.
+    */
+    const deterministicDuration =
+      getDeterministicDuration(
+        userInput
+      );
+
     console.log(
       "Deterministic due date:",
       deterministicDueDate
+    );
+
+    console.log(
+      "Deterministic duration:",
+      deterministicDuration
     );
 
     const ai = new GoogleGenAI({
@@ -260,10 +385,12 @@ export default async function handler(
     );
 
     const response =
-      await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+      await ai.models.generateContent(
+        {
+          model:
+            "gemini-3.6-flash",
 
-        contents: `
+          contents: `
 You are Atlas, an intelligent personal task assistant.
 
 Today's date is:
@@ -272,10 +399,12 @@ ${todayString}
 
 Convert the user's request into ONE structured task.
 
-Return exactly:
+Return exactly these fields:
 
 title
 priority
+duration
+category
 dueDate
 
 Priority must be exactly:
@@ -284,7 +413,16 @@ high
 medium
 low
 
-Rules:
+Category must be exactly one of:
+
+work
+study
+health
+personal
+finance
+other
+
+Rules for priority:
 
 - urgent means high
 - critical means high
@@ -293,59 +431,152 @@ Rules:
 - low priority means low
 - otherwise use medium
 
-Remove priority phrases from the title.
+Rules for duration:
 
-Remove date phrases from the title.
+- Return duration in MINUTES.
+- If the user explicitly gives a duration, use it.
+- "2 hours" = 120
+- "1.5 hours" = 90
+- "30 minutes" = 30
+- "90 minutes" = 90
+- If no duration is given, estimate a realistic duration.
+- Do not return zero.
+- Keep estimates reasonable.
 
-If the request contains a date phrase, return the date in YYYY-MM-DD format.
+Rules for category:
 
-If there is no date phrase, return null.
+- Studying, GATE preparation, exams, learning = study
+- Gym, exercise, workout, health = health
+- Work, reports, projects, meetings = work
+- Money, bills, payments = finance
+- Personal errands and personal activities = personal
+- Everything else = other
 
-Do not invent information.
+Rules for title:
+
+- Remove priority phrases.
+- Remove date phrases.
+- Remove duration phrases.
+- Keep the actual task/action.
+- Do not invent information.
+
+Rules for dueDate:
+
+- Return YYYY-MM-DD.
+- If there is no due date, return null.
+- Do not invent a deadline.
+
+Examples:
+
+User:
+Study GATE for 2 hours tomorrow
+
+Return:
+{
+  "title": "Study GATE",
+  "priority": "medium",
+  "duration": 120,
+  "category": "study",
+  "dueDate": "YYYY-MM-DD"
+}
+
+User:
+Finish my BESS report for 3 hours next Friday, urgent
+
+Return:
+{
+  "title": "Finish my BESS report",
+  "priority": "high",
+  "duration": 180,
+  "category": "work",
+  "dueDate": "YYYY-MM-DD"
+}
+
+User:
+Go to gym for 1 hour tomorrow
+
+Return:
+{
+  "title": "Go to gym",
+  "priority": "medium",
+  "duration": 60,
+  "category": "health",
+  "dueDate": "YYYY-MM-DD"
+}
+
+User:
+Read research paper
+
+Return:
+{
+  "title": "Read research paper",
+  "priority": "medium",
+  "duration": 30,
+  "category": "study",
+  "dueDate": null
+}
 
 User request:
 
 ${userInput.trim()}
-        `,
+          `,
 
-        config: {
-          responseMimeType:
-            "application/json",
+          config: {
+            responseMimeType:
+              "application/json",
 
-          responseSchema: {
-            type: "object",
+            responseSchema: {
+              type: "object",
 
-            properties: {
-              title: {
-                type: "string",
+              properties: {
+                title: {
+                  type: "string",
+                },
+
+                priority: {
+                  type: "string",
+                  enum: [
+                    "high",
+                    "medium",
+                    "low",
+                  ],
+                },
+
+                duration: {
+                  type: "number",
+                },
+
+                category: {
+                  type: "string",
+                  enum: [
+                    "work",
+                    "study",
+                    "health",
+                    "personal",
+                    "finance",
+                    "other",
+                  ],
+                },
+
+                dueDate: {
+                  type: [
+                    "string",
+                    "null",
+                  ],
+                },
               },
 
-              priority: {
-                type: "string",
-
-                enum: [
-                  "high",
-                  "medium",
-                  "low",
-                ],
-              },
-
-              dueDate: {
-                type: [
-                  "string",
-                  "null",
-                ],
-              },
+              required: [
+                "title",
+                "priority",
+                "duration",
+                "category",
+                "dueDate",
+              ],
             },
-
-            required: [
-              "title",
-              "priority",
-              "dueDate",
-            ],
           },
-        },
-      });
+        }
+      );
 
     console.log(
       "Gemini response received."
@@ -366,31 +597,99 @@ ${userInput.trim()}
     }
 
     const result =
-      JSON.parse(outputText) as AtlasTask;
+      JSON.parse(
+        outputText
+      ) as AtlasTask;
 
     /*
-      Override Gemini's date when our deterministic
-      parser recognized the user's relative date.
-
-      This is the important fix.
+      Override Gemini's date when our
+      deterministic parser recognized one.
     */
     if (
-      deterministicDueDate !== undefined
+      deterministicDueDate !==
+      undefined
     ) {
       result.dueDate =
         deterministicDueDate;
     }
 
-    // Safety: make sure priority is valid
+    /*
+      Override Gemini's duration when
+      the user explicitly specified one.
+    */
+    if (
+      deterministicDuration !==
+      undefined
+    ) {
+      result.duration =
+        deterministicDuration;
+    }
+
+    /*
+      Validate priority.
+    */
     if (
       result.priority !== "high" &&
       result.priority !== "medium" &&
       result.priority !== "low"
     ) {
-      result.priority = "medium";
+      result.priority =
+        "medium";
     }
 
-    // Clean title
+    /*
+      Validate category.
+    */
+    const validCategories:
+      Category[] = [
+        "work",
+        "study",
+        "health",
+        "personal",
+        "finance",
+        "other",
+      ];
+
+    if (
+      !validCategories.includes(
+        result.category
+      )
+    ) {
+      result.category =
+        "other";
+    }
+
+    /*
+      Validate duration.
+    */
+    if (
+      !Number.isFinite(
+        result.duration
+      ) ||
+      result.duration <= 0
+    ) {
+      result.duration = 30;
+    }
+
+    result.duration = Math.round(
+      result.duration
+    );
+
+    /*
+      Keep duration within a
+      sensible range.
+    */
+    result.duration = Math.min(
+      Math.max(
+        result.duration,
+        5
+      ),
+      1440
+    );
+
+    /*
+      Clean title.
+    */
     result.title =
       result.title.trim();
 
@@ -399,7 +698,9 @@ ${userInput.trim()}
       result
     );
 
-    return res.status(200).json(result);
+    return res.status(200).json(
+      result
+    );
   } catch (error: unknown) {
     console.error(
       "ATLAS GEMINI ERROR:",
@@ -409,7 +710,9 @@ ${userInput.trim()}
     let message =
       "Atlas could not understand that task. Please try again.";
 
-    if (error instanceof Error) {
+    if (
+      error instanceof Error
+    ) {
       message = error.message;
     }
 
