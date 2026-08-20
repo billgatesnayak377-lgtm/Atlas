@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import DashboardCard from "../components/layout/DashboardCard";
 import TaskCard from "../components/tasks/TaskCard";
 import AddTask from "../components/tasks/AddTask";
@@ -15,6 +15,18 @@ type Category =
   | "finance"
   | "other";
 
+type PreferredTime =
+  | "anytime"
+  | "morning"
+  | "afternoon"
+  | "evening";
+
+type Recurrence =
+  | "none"
+  | "daily"
+  | "weekdays"
+  | "weekly";
+
 type Task = {
   id: number;
   title: string;
@@ -23,6 +35,10 @@ type Task = {
   duration: number;
   category: Category;
   dueDate?: string;
+  dependencyIds: number[];
+  preferredTime: PreferredTime;
+  recurrence: Recurrence;
+  reminder?: string;
 };
 
 type PlannedTask = {
@@ -32,86 +48,411 @@ type PlannedTask = {
   duration: number;
   category: Category;
   dueDate: string | null;
+  dependencyIds?: number[];
+  preferredTime?: PreferredTime;
+  recurrence?: Recurrence;
+  reminder?: string;
   reason: string;
   suggestedOrder: number;
 };
 
+type PlannerResponse = {
+  plan: PlannedTask[];
+  summary: string;
+  totalScheduledMinutes?: number;
+  totalUnscheduledMinutes?: number;
+  error?: string;
+};
 
+/* -------------------------------------------------------
+   OPTIONS
+------------------------------------------------------- */
+
+const CATEGORY_OPTIONS: {
+  value: Category;
+  label: string;
+}[] = [
+  {
+    value: "work",
+    label: "💼 Work",
+  },
+  {
+    value: "study",
+    label: "📚 Study",
+  },
+  {
+    value: "health",
+    label: "🏋️ Health",
+  },
+  {
+    value: "personal",
+    label: "👤 Personal",
+  },
+  {
+    value: "finance",
+    label: "💰 Finance",
+  },
+  {
+    value: "other",
+    label: "📌 Other",
+  },
+];
+
+const PREFERRED_TIME_OPTIONS: {
+  value: PreferredTime;
+  label: string;
+}[] = [
+  {
+    value: "anytime",
+    label: "Anytime",
+  },
+  {
+    value: "morning",
+    label: "🌅 Morning",
+  },
+  {
+    value: "afternoon",
+    label: "☀️ Afternoon",
+  },
+  {
+    value: "evening",
+    label: "🌙 Evening",
+  },
+];
+
+const RECURRENCE_OPTIONS: {
+  value: Recurrence;
+  label: string;
+}[] = [
+  {
+    value: "none",
+    label: "Does not repeat",
+  },
+  {
+    value: "daily",
+    label: "🔁 Daily",
+  },
+  {
+    value: "weekdays",
+    label: "📅 Weekdays",
+  },
+  {
+    value: "weekly",
+    label: "🗓️ Weekly",
+  },
+];
+
+/* -------------------------------------------------------
+   NORMALIZATION
+------------------------------------------------------- */
+
+function normalizeDuration(
+  value: unknown
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0
+  ) {
+    return 30;
+  }
+
+  return Math.min(
+    Math.max(Math.round(value), 5),
+    1440
+  );
+}
+
+function normalizePriority(
+  value: unknown
+): Priority {
+  if (
+    value === "high" ||
+    value === "medium" ||
+    value === "low"
+  ) {
+    return value;
+  }
+
+  return "medium";
+}
+
+function normalizeCategory(
+  value: unknown
+): Category {
+  if (
+    value === "work" ||
+    value === "study" ||
+    value === "health" ||
+    value === "personal" ||
+    value === "finance" ||
+    value === "other"
+  ) {
+    return value;
+  }
+
+  return "other";
+}
+
+function normalizePreferredTime(
+  value: unknown
+): PreferredTime {
+  if (
+    value === "morning" ||
+    value === "afternoon" ||
+    value === "evening" ||
+    value === "anytime"
+  ) {
+    return value;
+  }
+
+  return "anytime";
+}
+
+function normalizeRecurrence(
+  value: unknown
+): Recurrence {
+  if (
+    value === "daily" ||
+    value === "weekdays" ||
+    value === "weekly" ||
+    value === "none"
+  ) {
+    return value;
+  }
+
+  return "none";
+}
+
+function normalizeDependencyIds(
+  value: unknown
+): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((id: unknown) => Number(id))
+    .filter(
+      (id: number) =>
+        Number.isFinite(id)
+    );
+}
+
+function normalizeTask(
+  task: Partial<Task>,
+  fallbackId: number
+): Task {
+  return {
+    id:
+      typeof task.id === "number" &&
+      Number.isFinite(task.id)
+        ? task.id
+        : fallbackId,
+
+    title:
+      typeof task.title === "string" &&
+      task.title.trim()
+        ? task.title.trim()
+        : "Untitled task",
+
+    completed: Boolean(
+      task.completed
+    ),
+
+    priority:
+      normalizePriority(
+        task.priority
+      ),
+
+    duration:
+      normalizeDuration(
+        task.duration
+      ),
+
+    category:
+      normalizeCategory(
+        task.category
+      ),
+
+    dueDate:
+      typeof task.dueDate === "string" &&
+      task.dueDate
+        ? task.dueDate
+        : undefined,
+
+    dependencyIds:
+      normalizeDependencyIds(
+        task.dependencyIds
+      ),
+
+    preferredTime:
+      normalizePreferredTime(
+        task.preferredTime
+      ),
+
+    recurrence:
+      normalizeRecurrence(
+        task.recurrence
+      ),
+
+    reminder:
+      typeof task.reminder === "string" &&
+      task.reminder
+        ? task.reminder
+        : undefined,
+  };
+}
+
+/* -------------------------------------------------------
+   HELPERS
+------------------------------------------------------- */
+
+function formatDuration(
+  minutes: number
+): string {
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(
+    minutes / 60
+  );
+
+  const remaining =
+    minutes % 60;
+
+  if (remaining === 0) {
+    return `${hours} hr${
+      hours === 1 ? "" : "s"
+    }`;
+  }
+
+  return `${hours}h ${remaining}m`;
+}
+
+function getPreferredTimeLabel(
+  value: PreferredTime
+): string {
+  const option =
+    PREFERRED_TIME_OPTIONS.find(
+      (
+        item: {
+          value: PreferredTime;
+          label: string;
+        }
+      ) =>
+        item.value === value
+    );
+
+  return option?.label ?? "Anytime";
+}
+
+function getRecurrenceLabel(
+  value: Recurrence
+): string {
+  const option =
+    RECURRENCE_OPTIONS.find(
+      (
+        item: {
+          value: Recurrence;
+          label: string;
+        }
+      ) =>
+        item.value === value
+    );
+
+  return (
+    option?.label ??
+    "Does not repeat"
+  );
+}
+
+/* -------------------------------------------------------
+   DASHBOARD
+------------------------------------------------------- */
 
 export default function Dashboard() {
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      TASKS
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    const savedTasks =
-      localStorage.getItem("atlas-tasks");
-
-    if (savedTasks) {
-      try {
-        const parsedTasks = JSON.parse(
-          savedTasks
+  const [tasks, setTasks] =
+    useState<Task[]>(() => {
+      const saved =
+        localStorage.getItem(
+          "atlas-tasks"
         );
 
-        return parsedTasks.map(
-          (task: Partial<Task>) => ({
-            id: task.id ?? Date.now(),
-            title:
-              task.title ?? "Untitled task",
-            completed:
-              task.completed ?? false,
-            priority:
-              task.priority ?? "medium",
-            duration:
-              typeof task.duration === "number"
-                ? task.duration
-                : 30,
-            category:
-              task.category ?? "other",
-            dueDate: task.dueDate,
-          })
-        );
-      } catch {
-        console.error(
-          "Could not load saved tasks."
-        );
+      if (saved) {
+        try {
+          const parsed: unknown =
+            JSON.parse(saved);
+
+          if (
+            Array.isArray(parsed)
+          ) {
+            return parsed.map(
+              (
+                task: Partial<Task>,
+                index: number
+              ) =>
+                normalizeTask(
+                  task,
+                  Date.now() + index
+                )
+            );
+          }
+        } catch {
+          console.error(
+            "Could not load saved Atlas tasks."
+          );
+        }
       }
-    }
 
-    return [
-      {
-        id: 1,
-        title: "Study React",
-        completed: true,
-        priority: "high",
-        duration: 60,
-        category: "study",
-        dueDate: "2026-08-15",
-      },
-      {
-        id: 2,
-        title: "Go to Gym",
-        completed: false,
-        priority: "medium",
-        duration: 60,
-        category: "health",
-        dueDate: "2026-08-15",
-      },
-      {
-        id: 3,
-        title: "Build Atlas",
-        completed: false,
-        priority: "high",
-        duration: 120,
-        category: "work",
-        dueDate: "2026-08-20",
-      },
-    ];
-  });
+      return [
+        {
+          id: 1,
+          title: "Study React",
+          completed: true,
+          priority: "high",
+          duration: 60,
+          category: "study",
+          dueDate: "2026-08-15",
+          dependencyIds: [],
+          preferredTime: "anytime",
+          recurrence: "none",
+        },
+        {
+          id: 2,
+          title: "Go to Gym",
+          completed: false,
+          priority: "medium",
+          duration: 60,
+          category: "health",
+          dueDate: "2026-08-15",
+          dependencyIds: [],
+          preferredTime: "evening",
+          recurrence: "none",
+        },
+        {
+          id: 3,
+          title: "Build Atlas",
+          completed: false,
+          priority: "high",
+          duration: 120,
+          category: "work",
+          dueDate: "2026-08-20",
+          dependencyIds: [],
+          preferredTime: "morning",
+          recurrence: "none",
+        },
+      ];
+    });
 
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      AI TASK ASSISTANT
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
   const [smartTask, setSmartTask] =
     useState("");
@@ -119,52 +460,60 @@ export default function Dashboard() {
   const [isAiLoading, setIsAiLoading] =
     useState(false);
 
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      DAILY PLANNER
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
   const [dailyPlan, setDailyPlan] =
     useState<PlannedTask[]>([]);
 
-  const [plannerSummary, setPlannerSummary] =
-    useState("");
+  const [
+    plannerSummary,
+    setPlannerSummary,
+  ] = useState("");
 
-  const [showPlanner, setShowPlanner] =
-    useState(false);
+  const [
+    showPlanner,
+    setShowPlanner,
+  ] = useState(false);
 
-  const [isPlannerLoading, setIsPlannerLoading] =
-    useState(false);
+  const [
+    isPlannerLoading,
+    setIsPlannerLoading,
+  ] = useState(false);
 
-  /*
-    Available time is stored in minutes.
+  const [
+    availableHours,
+    setAvailableHours,
+  ] = useState("");
 
-    Example:
-    60  = 1 hour
-    120 = 2 hours
-    240 = 4 hours
-  */
-  const [availableHours, setAvailableHours] =
-    useState("");
+  const [
+    availableMinutesInput,
+    setAvailableMinutesInput,
+  ] = useState("");
 
-  const [availableMinutes, setAvailableMinutes] =
-    useState("");
+  const [
+    plannerStats,
+    setPlannerStats,
+  ] = useState({
+    scheduled: 0,
+    unscheduled: 0,
+  });
 
-  const [plannerStats, setPlannerStats] =
-    useState({
-      scheduled: 0,
-      unscheduled: 0,
-    });
-
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      FOCUS MODE
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
-  const [focusTaskId, setFocusTaskId] =
-    useState<number | null>(null);
+  const [
+    focusTaskId,
+    setFocusTaskId,
+  ] = useState<number | null>(
+    null
+  );
 
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      SAVE TASKS
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
   useEffect(() => {
     localStorage.setItem(
@@ -173,100 +522,153 @@ export default function Dashboard() {
     );
   }, [tasks]);
 
-  /* -------------------------------------------------------
-     PROGRESS
-  ------------------------------------------------------- */
+  /* -----------------------------------------------------
+     DERIVED DATA
+  ----------------------------------------------------- */
 
-  const completedTasks = tasks.filter(
-    (task) => task.completed
-  ).length;
+  const completedTasks =
+    tasks.filter(
+      (task: Task) =>
+        task.completed
+    ).length;
 
   const progress =
     tasks.length === 0
       ? 0
       : Math.round(
-          (completedTasks / tasks.length) *
+          (completedTasks /
+            tasks.length) *
             100
         );
-
-  /* -------------------------------------------------------
-     FOCUS TASK
-  ------------------------------------------------------- */
 
   const focusTask =
     focusTaskId === null
       ? null
       : tasks.find(
-          (task) =>
-            task.id === focusTaskId
+          (task: Task) =>
+            task.id ===
+            focusTaskId
         ) ?? null;
 
-  /* -------------------------------------------------------
-     TASK FUNCTIONS
-  ------------------------------------------------------- */
+  const totalUnfinishedMinutes =
+    useMemo(
+      () =>
+        tasks
+          .filter(
+            (task: Task) =>
+              !task.completed
+          )
+          .reduce(
+            (
+              total: number,
+              task: Task
+            ) =>
+              total +
+              task.duration,
+            0
+          ),
+      [tasks]
+    );
 
-  function toggleTask(taskId: number) {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              completed:
-                !task.completed,
-            }
-          : task
-      )
+  /* -----------------------------------------------------
+     TASK ACTIONS
+  ----------------------------------------------------- */
+
+  function toggleTask(
+    taskId: number
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  completed:
+                    !task.completed,
+                }
+              : task
+        )
     );
   }
 
-  function deleteTask(taskId: number) {
-    setTasks((currentTasks) =>
-      currentTasks.filter(
-        (task) => task.id !== taskId
-      )
+  function deleteTask(
+    taskId: number
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current
+          .filter(
+            (task: Task) =>
+              task.id !== taskId
+          )
+          .map(
+            (task: Task) => ({
+              ...task,
+              dependencyIds:
+                task.dependencyIds.filter(
+                  (id: number) =>
+                    id !== taskId
+                ),
+            })
+          )
     );
 
-    if (focusTaskId === taskId) {
+    setDailyPlan(
+      (current: PlannedTask[]) =>
+        current.filter(
+          (task: PlannedTask) =>
+            task.id !== taskId
+        )
+    );
+
+    if (
+      focusTaskId === taskId
+    ) {
       setFocusTaskId(null);
     }
-
-    setDailyPlan((currentPlan) =>
-      currentPlan.filter(
-        (task) =>
-          task.id !== taskId
-      )
-    );
   }
 
-  function addTask(title: string) {
-    const trimmedTitle =
+  function addTask(
+    title: string
+  ) {
+    const trimmed =
       title.trim();
 
-    if (!trimmedTitle) {
+    if (!trimmed) {
       return;
     }
 
     const newTask: Task = {
       id: Date.now(),
-      title: trimmedTitle,
+      title: trimmed,
       completed: false,
       priority: "medium",
       duration: 30,
       category: "other",
       dueDate: undefined,
+      dependencyIds: [],
+      preferredTime: "anytime",
+      recurrence: "none",
+      reminder: undefined,
     };
 
-    setTasks((currentTasks) => [
-      ...currentTasks,
-      newTask,
-    ]);
+    setTasks(
+      (current: Task[]) => [
+        ...current,
+        newTask,
+      ]
+    );
   }
 
-  function editTask(taskId: number) {
-    const task = tasks.find(
-      (item) =>
-        item.id === taskId
-    );
+  function editTaskTitle(
+    taskId: number
+  ) {
+    const task =
+      tasks.find(
+        (item: Task) =>
+          item.id === taskId
+      );
 
     if (!task) {
       return;
@@ -280,33 +682,37 @@ export default function Dashboard() {
 
     if (
       newTitle === null ||
-      newTitle.trim() === ""
+      !newTitle.trim()
     ) {
       return;
     }
 
-    setTasks((currentTasks) =>
-      currentTasks.map((item) =>
-        item.id === taskId
-          ? {
-              ...item,
-              title:
-                newTitle.trim(),
-            }
-          : item
-      )
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (item: Task) =>
+            item.id === taskId
+              ? {
+                  ...item,
+                  title:
+                    newTitle.trim(),
+                }
+              : item
+        )
     );
 
-    setDailyPlan((currentPlan) =>
-      currentPlan.map((item) =>
-        item.id === taskId
-          ? {
-              ...item,
-              title:
-                newTitle.trim(),
-            }
-          : item
-      )
+    setDailyPlan(
+      (current: PlannedTask[]) =>
+        current.map(
+          (item: PlannedTask) =>
+            item.id === taskId
+              ? {
+                  ...item,
+                  title:
+                    newTitle.trim(),
+                }
+              : item
+        )
     );
   }
 
@@ -314,32 +720,17 @@ export default function Dashboard() {
     taskId: number,
     priority: Priority
   ) {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              priority,
-            }
-          : task
-      )
-    );
-  }
-
-  function changeDueDate(
-    taskId: number,
-    dueDate: string
-  ) {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              dueDate:
-                dueDate || undefined,
-            }
-          : task
-      )
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  priority,
+                }
+              : task
+        )
     );
   }
 
@@ -348,36 +739,195 @@ export default function Dashboard() {
     duration: number
   ) {
     if (
-      !Number.isFinite(duration)
+      !Number.isFinite(
+        duration
+      )
     ) {
       return;
     }
 
-    const safeDuration =
-      Math.min(
-        Math.max(
-          Math.round(duration),
-          5
-        ),
-        1440
-      );
-
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              duration:
-                safeDuration,
-            }
-          : task
-      )
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  duration:
+                    normalizeDuration(
+                      duration
+                    ),
+                }
+              : task
+        )
     );
   }
 
-  /* -------------------------------------------------------
+  function changeDueDate(
+    taskId: number,
+    dueDate: string
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  dueDate:
+                    dueDate ||
+                    undefined,
+                }
+              : task
+        )
+    );
+  }
+
+  function changeCategory(
+    taskId: number,
+    category: Category
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  category,
+                }
+              : task
+        )
+    );
+  }
+
+  function changePreferredTime(
+    taskId: number,
+    preferredTime: PreferredTime
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  preferredTime,
+                }
+              : task
+        )
+    );
+  }
+
+  function changeRecurrence(
+    taskId: number,
+    recurrence: Recurrence
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  recurrence,
+                }
+              : task
+        )
+    );
+  }
+
+  function changeReminder(
+    taskId: number,
+    reminder: string
+  ) {
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  reminder:
+                    reminder ||
+                    undefined,
+                }
+              : task
+        )
+    );
+  }
+
+  /* -----------------------------------------------------
+     DEPENDENCIES
+  ----------------------------------------------------- */
+
+  function toggleDependency(
+    taskId: number,
+    dependencyId: number
+  ) {
+    if (
+      taskId ===
+      dependencyId
+    ) {
+      return;
+    }
+
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) => {
+            if (
+              task.id !== taskId
+            ) {
+              return task;
+            }
+
+            const exists =
+              task.dependencyIds.includes(
+                dependencyId
+              );
+
+            return {
+              ...task,
+              dependencyIds:
+                exists
+                  ? task.dependencyIds.filter(
+                      (id: number) =>
+                        id !==
+                        dependencyId
+                    )
+                  : [
+                      ...task.dependencyIds,
+                      dependencyId,
+                    ],
+            };
+          }
+        )
+    );
+  }
+
+  function getDependencyNames(
+    task: Task
+  ): string[] {
+    return task.dependencyIds
+      .map(
+        (id: number) =>
+          tasks.find(
+            (item: Task) =>
+              item.id === id
+          )?.title
+      )
+      .filter(
+        (
+          title: string | undefined
+        ): title is string =>
+          Boolean(title)
+      );
+  }
+
+  /* -----------------------------------------------------
      AI TASK CREATION
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
   async function createSmartTask() {
     const input =
@@ -408,12 +958,21 @@ export default function Dashboard() {
           }
         );
 
-      const data =
+      const data: {
+        title?: string;
+        priority?: Priority;
+        duration?: number;
+        category?: Category;
+        dueDate?:
+          | string
+          | null;
+        error?: string;
+      } =
         await response.json();
 
       if (!response.ok) {
         throw new Error(
-          data?.error ||
+          data.error ||
             "Atlas could not understand the task."
         );
       }
@@ -428,74 +987,41 @@ export default function Dashboard() {
         );
       }
 
-      const validPriorities: Priority[] =
-        [
-          "high",
-          "medium",
-          "low",
-        ];
+      const newTask: Task =
+        normalizeTask(
+          {
+            id: Date.now(),
+            title:
+              data.title.trim(),
+            completed: false,
+            priority:
+              data.priority,
+            duration:
+              data.duration,
+            category:
+              data.category,
+            dueDate:
+              typeof data.dueDate ===
+              "string"
+                ? data.dueDate
+                : undefined,
+            dependencyIds: [],
+            preferredTime:
+              "anytime",
+            recurrence:
+              "none",
+            reminder:
+              undefined,
+          },
+          Date.now()
+        );
 
-      const validCategories: Category[] =
-        [
-          "work",
-          "study",
-          "health",
-          "personal",
-          "finance",
-          "other",
-        ];
-
-      const priority: Priority =
-        validPriorities.includes(
-          data.priority
-        )
-          ? data.priority
-          : "medium";
-
-      const category: Category =
-        validCategories.includes(
-          data.category
-        )
-          ? data.category
-          : "other";
-
-      const duration =
-        typeof data.duration ===
-          "number" &&
-        Number.isFinite(
-          data.duration
-        ) &&
-        data.duration > 0
-          ? Math.min(
-              Math.max(
-                Math.round(
-                  data.duration
-                ),
-                5
-              ),
-              1440
-            )
-          : 30;
-
-      const newTask: Task = {
-        id: Date.now(),
-        title:
-          data.title.trim(),
-        completed: false,
-        priority,
-        duration,
-        category,
-        dueDate:
-          typeof data.dueDate ===
-          "string"
-            ? data.dueDate
-            : undefined,
-      };
-
-      setTasks((currentTasks) => [
-        ...currentTasks,
-        newTask,
-      ]);
+      setTasks(
+        (current: Task[]) => [
+          ...current,
+          newTask,
+        ]
+      );
 
       setSmartTask("");
     } catch (error) {
@@ -512,41 +1038,40 @@ export default function Dashboard() {
     }
   }
 
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      AVAILABLE TIME
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
-  function getAvailableMinutes(): number | null {
+  function getAvailableMinutes():
+    | number
+    | null {
     const hours =
-      Number(availableHours);
+      Number(
+        availableHours
+      );
 
     const minutes =
-      Number(availableMinutes);
+      Number(
+        availableMinutesInput
+      );
 
     const safeHours =
       Number.isFinite(hours)
-        ? Math.max(
-            0,
-            hours
-          )
+        ? Math.max(0, hours)
         : 0;
 
     const safeMinutes =
       Number.isFinite(minutes)
         ? Math.max(
             0,
-            Math.min(
-              minutes,
-              59
-            )
+            Math.min(minutes, 59)
           )
         : 0;
 
-    const total =
-      Math.round(
-        safeHours * 60 +
-          safeMinutes
-      );
+    const total = Math.round(
+      safeHours * 60 +
+        safeMinutes
+    );
 
     if (total <= 0) {
       return null;
@@ -560,12 +1085,12 @@ export default function Dashboard() {
 
   function clearAvailableTime() {
     setAvailableHours("");
-    setAvailableMinutes("");
+    setAvailableMinutesInput("");
   }
 
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      DAILY PLANNER
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
   async function planMyDay() {
     if (
@@ -576,7 +1101,7 @@ export default function Dashboard() {
 
     const activeTasks =
       tasks.filter(
-        (task) =>
+        (task: Task) =>
           !task.completed
       );
 
@@ -607,19 +1132,24 @@ export default function Dashboard() {
             body: JSON.stringify({
               tasks:
                 activeTasks,
-
               availableMinutes:
                 selectedAvailableMinutes,
             }),
           }
         );
 
+      /*
+       * Important:
+       * Use ONE response type instead of a union.
+       * This allows TypeScript to safely access
+       * plan, summary and scheduling statistics.
+       */
       const data =
-        await response.json();
+        (await response.json()) as PlannerResponse;
 
       if (!response.ok) {
         throw new Error(
-          data?.error ||
+          data.error ||
             "Atlas could not create your plan."
         );
       }
@@ -635,16 +1165,19 @@ export default function Dashboard() {
       }
 
       const validIds =
-        new Set(
+        new Set<number>(
           activeTasks.map(
-            (task) => task.id
+            (task: Task) =>
+              task.id
           )
         );
 
-      const cleanedPlan: PlannedTask[] =
+      const cleanedPlan =
         data.plan
           .filter(
-            (task: PlannedTask) =>
+            (
+              task: PlannedTask
+            ) =>
               validIds.has(
                 task.id
               )
@@ -661,10 +1194,10 @@ export default function Dashboard() {
             (
               task: PlannedTask,
               index: number
-            ) => {
-              const originalTask =
+            ): PlannedTask => {
+              const original =
                 activeTasks.find(
-                  (item) =>
+                  (item: Task) =>
                     item.id ===
                     task.id
                 );
@@ -673,27 +1206,42 @@ export default function Dashboard() {
                 ...task,
 
                 title:
-                  originalTask?.title ??
+                  original?.title ??
                   task.title,
 
                 priority:
-                  originalTask?.priority ??
+                  original?.priority ??
                   task.priority,
 
                 duration:
-                  originalTask?.duration ??
+                  original?.duration ??
                   task.duration ??
                   30,
 
                 category:
-                  originalTask?.category ??
+                  original?.category ??
                   task.category ??
                   "other",
 
                 dueDate:
-                  originalTask?.dueDate ??
+                  original?.dueDate ??
                   task.dueDate ??
                   null,
+
+                dependencyIds:
+                  original?.dependencyIds ??
+                  [],
+
+                preferredTime:
+                  original?.preferredTime ??
+                  "anytime",
+
+                recurrence:
+                  original?.recurrence ??
+                  "none",
+
+                reminder:
+                  original?.reminder,
 
                 suggestedOrder:
                   index + 1,
@@ -706,29 +1254,37 @@ export default function Dashboard() {
       );
 
       setPlannerSummary(
-        typeof data.summary ===
-          "string"
-          ? data.summary
-          : "Here is your recommended plan for today."
+        data.summary ||
+          "Here is your recommended plan for today."
       );
 
-      setPlannerStats({
-        scheduled:
-          typeof data.totalScheduledMinutes ===
-          "number"
-            ? data.totalScheduledMinutes
-            : cleanedPlan.reduce(
-                (total, task) =>
-                  total +
-                  task.duration,
-                0
-              ),
+      const scheduled =
+        typeof data.totalScheduledMinutes ===
+        "number"
+          ? data.totalScheduledMinutes
+          : cleanedPlan.reduce(
+              (
+                total: number,
+                task: PlannedTask
+              ) =>
+                total +
+                task.duration,
+              0
+            );
 
-        unscheduled:
-          typeof data.totalUnscheduledMinutes ===
-          "number"
-            ? data.totalUnscheduledMinutes
-            : 0,
+      const unscheduled =
+        typeof data.totalUnscheduledMinutes ===
+        "number"
+          ? data.totalUnscheduledMinutes
+          : Math.max(
+              0,
+              totalUnfinishedMinutes -
+                scheduled
+            );
+
+      setPlannerStats({
+        scheduled,
+        unscheduled,
       });
 
       setShowPlanner(true);
@@ -746,29 +1302,30 @@ export default function Dashboard() {
     }
   }
 
-  /* -------------------------------------------------------
-     FOCUS MODE
-  ------------------------------------------------------- */
+  /* -----------------------------------------------------
+     FOCUS
+  ----------------------------------------------------- */
 
   function completeFocusTask(
     taskId: number
   ) {
-    setTasks((currentTasks) =>
-      currentTasks.map(
-        (task) =>
-          task.id === taskId
-            ? {
-                ...task,
-                completed: true,
-              }
-            : task
-      )
+    setTasks(
+      (current: Task[]) =>
+        current.map(
+          (task: Task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  completed: true,
+                }
+              : task
+        )
     );
 
     setDailyPlan(
-      (currentPlan) =>
-        currentPlan.filter(
-          (task) =>
+      (current: PlannedTask[]) =>
+        current.filter(
+          (task: PlannedTask) =>
             task.id !== taskId
         )
     );
@@ -776,38 +1333,9 @@ export default function Dashboard() {
     setFocusTaskId(null);
   }
 
-  /* -------------------------------------------------------
-     DISPLAY HELPERS
-  ------------------------------------------------------- */
-
-  function formatDuration(
-    minutes: number
-  ) {
-    if (minutes < 60) {
-      return `${minutes} min`;
-    }
-
-    const hours =
-      Math.floor(
-        minutes / 60
-      );
-
-    const remainingMinutes =
-      minutes % 60;
-
-    if (
-      remainingMinutes ===
-      0
-    ) {
-      return `${hours} hr${
-        hours === 1
-          ? ""
-          : "s"
-      }`;
-    }
-
-    return `${hours}h ${remainingMinutes}m`;
-  }
+  /* -----------------------------------------------------
+     GREETING
+  ----------------------------------------------------- */
 
   const currentHour =
     new Date().getHours();
@@ -838,28 +1366,16 @@ export default function Dashboard() {
   const selectedAvailableMinutes =
     getAvailableMinutes();
 
-  const totalUnfinishedMinutes =
-    tasks
-      .filter(
-        (task) =>
-          !task.completed
-      )
-      .reduce(
-        (total, task) =>
-          total + task.duration,
-        0
-      );
-
-  /* -------------------------------------------------------
+  /* -----------------------------------------------------
      RENDER
-  ------------------------------------------------------- */
+  ----------------------------------------------------- */
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
-
       <DashboardCard>
 
-        {/* Greeting */}
+        {/* HEADER */}
+
         <h1 className="text-4xl font-bold text-sky-400">
           👋 {greeting}, Bill
         </h1>
@@ -870,14 +1386,11 @@ export default function Dashboard() {
 
         <div className="border-t border-slate-700 my-6" />
 
-        {/* -------------------------------------------------
-            AI TASK ASSISTANT
-        ------------------------------------------------- */}
+        {/* AI ASSISTANT */}
 
         <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5 mb-6">
 
           <div className="flex items-center gap-2">
-
             <span className="text-2xl">
               🧠
             </span>
@@ -891,7 +1404,6 @@ export default function Dashboard() {
                 Tell Atlas what you need to do.
               </p>
             </div>
-
           </div>
 
           <div className="flex gap-3 mt-4">
@@ -899,12 +1411,16 @@ export default function Dashboard() {
             <input
               type="text"
               value={smartTask}
-              onChange={(event) =>
+              onChange={(
+                event: React.ChangeEvent<HTMLInputElement>
+              ) =>
                 setSmartTask(
                   event.target.value
                 )
               }
-              onKeyDown={(event) => {
+              onKeyDown={(
+                event: React.KeyboardEvent<HTMLInputElement>
+              ) => {
                 if (
                   event.key ===
                     "Enter" &&
@@ -926,8 +1442,7 @@ export default function Dashboard() {
               }
               disabled={
                 isAiLoading ||
-                smartTask.trim() ===
-                  ""
+                !smartTask.trim()
               }
               className="rounded-xl bg-sky-500 hover:bg-sky-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-950 font-semibold px-5 transition"
             >
@@ -939,16 +1454,11 @@ export default function Dashboard() {
           </div>
 
           <p className="text-xs text-slate-500 mt-3">
-            Try: "Study GATE for
-            2 hours tomorrow,
-            high priority"
+            Example: "Study GATE for 2 hours tomorrow, high priority"
           </p>
-
         </div>
 
-        {/* -------------------------------------------------
-            TODAY'S FOCUS
-        ------------------------------------------------- */}
+        {/* TODAY'S FOCUS */}
 
         <div className="flex items-center justify-between gap-4">
 
@@ -972,9 +1482,7 @@ export default function Dashboard() {
 
         </div>
 
-        {/* -------------------------------------------------
-            AVAILABLE TIME
-        ------------------------------------------------- */}
+        {/* AVAILABLE TIME */}
 
         <div className="mt-5 rounded-2xl border border-purple-500/20 bg-purple-500/5 p-5">
 
@@ -984,24 +1492,20 @@ export default function Dashboard() {
               ⏰
             </div>
 
-            <div className="flex-1">
-
+            <div>
               <h3 className="text-lg font-semibold text-white">
                 How much time do you have today?
               </h3>
 
               <p className="text-sm text-slate-400 mt-1">
-                Atlas will choose the best tasks
-                that fit your available time.
+                Atlas will choose the best tasks that fit your available time.
               </p>
-
             </div>
 
           </div>
 
           <div className="flex flex-wrap items-end gap-3 mt-4">
 
-            {/* Hours */}
             <div>
               <label className="block text-xs text-slate-500 mb-1">
                 Hours
@@ -1014,9 +1518,12 @@ export default function Dashboard() {
                 value={
                   availableHours
                 }
-                onChange={(event) =>
+                onChange={(
+                  event
+                ) =>
                   setAvailableHours(
-                    event.target.value
+                    event.target
+                      .value
                   )
                 }
                 placeholder="4"
@@ -1024,7 +1531,6 @@ export default function Dashboard() {
               />
             </div>
 
-            {/* Minutes */}
             <div>
               <label className="block text-xs text-slate-500 mb-1">
                 Minutes
@@ -1035,11 +1541,14 @@ export default function Dashboard() {
                 min="0"
                 max="59"
                 value={
-                  availableMinutes
+                  availableMinutesInput
                 }
-                onChange={(event) =>
-                  setAvailableMinutes(
-                    event.target.value
+                onChange={(
+                  event
+                ) =>
+                  setAvailableMinutesInput(
+                    event.target
+                      .value
                   )
                 }
                 placeholder="00"
@@ -1068,7 +1577,7 @@ export default function Dashboard() {
 
             {(availableHours !==
               "" ||
-              availableMinutes !==
+              availableMinutesInput !==
                 "") && (
               <button
                 type="button"
@@ -1106,9 +1615,7 @@ export default function Dashboard() {
 
         </div>
 
-        {/* -------------------------------------------------
-            DAILY PLANNER
-        ------------------------------------------------- */}
+        {/* DAILY PLAN */}
 
         {showPlanner && (
           <div className="mt-5 rounded-2xl border border-purple-500/30 bg-purple-500/5 p-5">
@@ -1139,7 +1646,6 @@ export default function Dashboard() {
 
             </div>
 
-            {/* Planner stats */}
             <div className="flex flex-wrap gap-3 mt-4">
 
               <span className="text-xs px-3 py-2 rounded-lg bg-green-500/10 text-green-300 border border-green-500/20">
@@ -1161,28 +1667,28 @@ export default function Dashboard() {
 
             </div>
 
-            {/* Plan */}
             <div className="mt-5 space-y-3">
 
               {dailyPlan.length ===
                 0 && (
                 <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-5 text-center text-slate-400">
-                  Atlas could not fit any
-                  complete task into the
-                  available time.
+                  Atlas could not fit any complete task into the available time.
                 </div>
               )}
 
               {dailyPlan.map(
-                (task) => (
+                (
+                  task: PlannedTask
+                ) => (
                   <div
-                    key={task.id}
+                    key={
+                      task.id
+                    }
                     className="rounded-xl bg-slate-900/80 border border-slate-800 p-4"
                   >
 
                     <div className="flex items-start gap-3">
 
-                      {/* Order */}
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center font-semibold">
                         {
                           task.suggestedOrder
@@ -1242,6 +1748,29 @@ export default function Dashboard() {
                             </span>
                           )}
 
+                          {task.preferredTime &&
+                            task.preferredTime !==
+                              "anytime" && (
+                              <span className="text-xs px-2 py-1 rounded-lg bg-slate-800 text-slate-400">
+                                🕐{" "}
+                                {getPreferredTimeLabel(
+                                  task.preferredTime
+                                )}
+                              </span>
+                            )}
+
+                          {task.recurrence &&
+                            task.recurrence !==
+                              "none" && (
+                              <span className="text-xs px-2 py-1 rounded-lg bg-slate-800 text-slate-400">
+                                {
+                                  getRecurrenceLabel(
+                                    task.recurrence
+                                  )
+                                }
+                              </span>
+                            )}
+
                         </div>
 
                         <p className="text-sm text-slate-400 mt-2">
@@ -1274,191 +1803,510 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* -------------------------------------------------
-            TASK LIST
-        ------------------------------------------------- */}
+        {/* TASK LIST */}
 
-        <div className="mt-5 space-y-4">
+        <div className="mt-5 space-y-5">
 
           {tasks.map(
-            (task) => (
-              <div
-                key={task.id}
-              >
+            (task: Task) => {
+              const dependencyNames =
+                getDependencyNames(
+                  task
+                );
 
-                <TaskCard
-                  title={
-                    task.title
+              return (
+                <div
+                  key={
+                    task.id
                   }
-                  completed={
-                    task.completed
-                  }
-                  priority={
-                    task.priority
-                  }
-                  dueDate={
-                    task.dueDate
-                  }
-                  onToggle={() =>
-                    toggleTask(
-                      task.id
-                    )
-                  }
-                  onDelete={() =>
-                    deleteTask(
-                      task.id
-                    )
-                  }
-                  onEdit={() =>
-                    editTask(
-                      task.id
-                    )
-                  }
-                />
+                >
 
-                {/* Task metadata */}
-                <div className="flex flex-wrap gap-2 mt-2 ml-2">
+                  <TaskCard
+                    title={
+                      task.title
+                    }
+                    completed={
+                      task.completed
+                    }
+                    priority={
+                      task.priority
+                    }
+                    dueDate={
+                      task.dueDate
+                    }
+                    onToggle={() =>
+                      toggleTask(
+                        task.id
+                      )
+                    }
+                    onDelete={() =>
+                      deleteTask(
+                        task.id
+                      )
+                    }
+                    onEdit={() =>
+                      editTaskTitle(
+                        task.id
+                      )
+                    }
+                  />
 
-                  <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400">
-                    ⏱️{" "}
-                    {formatDuration(
-                      task.duration
+                  {/* BASIC METADATA */}
+
+                  <div className="flex flex-wrap gap-2 mt-2 ml-2">
+
+                    <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400">
+                      ⏱️{" "}
+                      {formatDuration(
+                        task.duration
+                      )}
+                    </span>
+
+                    <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400">
+                      {
+                        CATEGORY_OPTIONS.find(
+                          (
+                            item: {
+                              value: Category;
+                              label: string;
+                            }
+                          ) =>
+                            item.value ===
+                            task.category
+                        )?.label ??
+                        "📌 Other"
+                      }
+                    </span>
+
+                    {task.preferredTime !==
+                      "anytime" && (
+                      <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400">
+                        🕐{" "}
+                        {getPreferredTimeLabel(
+                          task.preferredTime
+                        )}
+                      </span>
                     )}
-                  </span>
 
-                  <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400 capitalize">
-                    📂{" "}
-                    {task.category}
-                  </span>
+                    {task.recurrence !==
+                      "none" && (
+                      <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400">
+                        {
+                          getRecurrenceLabel(
+                            task.recurrence
+                          )
+                        }
+                      </span>
+                    )}
 
-                </div>
+                    {task.reminder && (
+                      <span className="text-xs px-3 py-1 rounded-lg bg-slate-800 text-slate-400">
+                        🔔{" "}
+                        {
+                          task.reminder
+                        }
+                      </span>
+                    )}
 
-                {/* Priority */}
-                <div className="flex gap-2 mt-2 ml-2">
+                  </div>
 
-                  <button
-                    onClick={() =>
-                      changePriority(
-                        task.id,
+                  {/* PRIORITY */}
+
+                  <div className="flex gap-2 mt-2 ml-2">
+
+                    <button
+                      onClick={() =>
+                        changePriority(
+                          task.id,
+                          "high"
+                        )
+                      }
+                      className={`text-xs px-3 py-1 rounded-lg transition ${
+                        task.priority ===
                         "high"
-                      )
-                    }
-                    className={`text-xs px-3 py-1 rounded-lg transition ${
-                      task.priority ===
-                      "high"
-                        ? "bg-red-500/30 text-red-400"
-                        : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                    }`}
-                  >
-                    🔴 High
-                  </button>
+                          ? "bg-red-500/30 text-red-400"
+                          : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                      }`}
+                    >
+                      🔴 High
+                    </button>
 
-                  <button
-                    onClick={() =>
-                      changePriority(
-                        task.id,
+                    <button
+                      onClick={() =>
+                        changePriority(
+                          task.id,
+                          "medium"
+                        )
+                      }
+                      className={`text-xs px-3 py-1 rounded-lg transition ${
+                        task.priority ===
                         "medium"
-                      )
-                    }
-                    className={`text-xs px-3 py-1 rounded-lg transition ${
-                      task.priority ===
-                      "medium"
-                        ? "bg-yellow-500/30 text-yellow-400"
-                        : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                    }`}
-                  >
-                    🟡 Medium
-                  </button>
+                          ? "bg-yellow-500/30 text-yellow-400"
+                          : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                      }`}
+                    >
+                      🟡 Medium
+                    </button>
 
-                  <button
-                    onClick={() =>
-                      changePriority(
-                        task.id,
+                    <button
+                      onClick={() =>
+                        changePriority(
+                          task.id,
+                          "low"
+                        )
+                      }
+                      className={`text-xs px-3 py-1 rounded-lg transition ${
+                        task.priority ===
                         "low"
-                      )
-                    }
-                    className={`text-xs px-3 py-1 rounded-lg transition ${
-                      task.priority ===
-                      "low"
-                        ? "bg-green-500/30 text-green-400"
-                        : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                    }`}
-                  >
-                    🟢 Low
-                  </button>
+                          ? "bg-green-500/30 text-green-400"
+                          : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                      }`}
+                    >
+                      🟢 Low
+                    </button>
 
-                </div>
+                  </div>
 
-                {/* Duration */}
-                <div className="flex items-center gap-3 mt-2 ml-2">
+                  {/* DURATION */}
 
-                  <label className="text-xs text-slate-400">
-                    ⏱️ Duration:
-                  </label>
+                  <div className="flex items-center gap-3 mt-2 ml-2">
 
-                  <input
-                    type="number"
-                    min="5"
-                    max="1440"
-                    value={
-                      task.duration
-                    }
-                    onChange={(
-                      event
-                    ) =>
-                      changeDuration(
-                        task.id,
-                        Number(
+                    <label className="text-xs text-slate-400">
+                      ⏱️ Duration:
+                    </label>
+
+                    <input
+                      type="number"
+                      min="5"
+                      max="1440"
+                      value={
+                        task.duration
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        changeDuration(
+                          task.id,
+                          Number(
+                            event.target
+                              .value
+                          )
+                        )
+                      }
+                      className="w-24 rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
+                    />
+
+                    <span className="text-xs text-slate-500">
+                      minutes
+                    </span>
+
+                  </div>
+
+                  {/* DUE DATE */}
+
+                  <div className="flex items-center gap-3 mt-2 ml-2">
+
+                    <label className="text-xs text-slate-400">
+                      📅 Due:
+                    </label>
+
+                    <input
+                      type="date"
+                      value={
+                        task.dueDate ??
+                        ""
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        changeDueDate(
+                          task.id,
                           event.target
                             .value
                         )
-                      )
-                    }
-                    className="w-24 rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
-                  />
+                      }
+                      className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
+                    />
 
-                  <span className="text-xs text-slate-500">
-                    minutes
-                  </span>
+                  </div>
+
+                  {/* CATEGORY */}
+
+                  <div className="flex items-center gap-3 mt-2 ml-2">
+
+                    <label className="text-xs text-slate-400">
+                      📂 Category:
+                    </label>
+
+                    <select
+                      value={
+                        task.category
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        changeCategory(
+                          task.id,
+                          event.target
+                            .value as Category
+                        )
+                      }
+                      className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
+                    >
+                      {CATEGORY_OPTIONS.map(
+                        (
+                          option: {
+                            value: Category;
+                            label: string;
+                          }
+                        ) => (
+                          <option
+                            key={
+                              option.value
+                            }
+                            value={
+                              option.value
+                            }
+                          >
+                            {
+                              option.label
+                            }
+                          </option>
+                        )
+                      )}
+                    </select>
+
+                  </div>
+
+                  {/* PREFERRED TIME */}
+
+                  <div className="flex items-center gap-3 mt-2 ml-2">
+
+                    <label className="text-xs text-slate-400">
+                      🕐 Best time:
+                    </label>
+
+                    <select
+                      value={
+                        task.preferredTime
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        changePreferredTime(
+                          task.id,
+                          event.target
+                            .value as PreferredTime
+                        )
+                      }
+                      className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
+                    >
+                      {PREFERRED_TIME_OPTIONS.map(
+                        (
+                          option: {
+                            value: PreferredTime;
+                            label: string;
+                          }
+                        ) => (
+                          <option
+                            key={
+                              option.value
+                            }
+                            value={
+                              option.value
+                            }
+                          >
+                            {
+                              option.label
+                            }
+                          </option>
+                        )
+                      )}
+                    </select>
+
+                  </div>
+
+                  {/* RECURRENCE */}
+
+                  <div className="flex items-center gap-3 mt-2 ml-2">
+
+                    <label className="text-xs text-slate-400">
+                      🔁 Repeat:
+                    </label>
+
+                    <select
+                      value={
+                        task.recurrence
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        changeRecurrence(
+                          task.id,
+                          event.target
+                            .value as Recurrence
+                        )
+                      }
+                      className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
+                    >
+                      {RECURRENCE_OPTIONS.map(
+                        (
+                          option: {
+                            value: Recurrence;
+                            label: string;
+                          }
+                        ) => (
+                          <option
+                            key={
+                              option.value
+                            }
+                            value={
+                              option.value
+                            }
+                          >
+                            {
+                              option.label
+                            }
+                          </option>
+                        )
+                      )}
+                    </select>
+
+                  </div>
+
+                  {/* REMINDER */}
+
+                  <div className="flex items-center gap-3 mt-2 ml-2">
+
+                    <label className="text-xs text-slate-400">
+                      🔔 Reminder:
+                    </label>
+
+                    <input
+                      type="time"
+                      value={
+                        task.reminder ??
+                        ""
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        changeReminder(
+                          task.id,
+                          event.target
+                            .value
+                        )
+                      }
+                      className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
+                    />
+
+                    {task.reminder && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          changeReminder(
+                            task.id,
+                            ""
+                          )
+                        }
+                        className="text-xs text-slate-500 hover:text-white"
+                      >
+                        Clear
+                      </button>
+                    )}
+
+                  </div>
+
+                  {/* DEPENDENCIES */}
+
+                  <div className="mt-3 ml-2 rounded-xl bg-slate-900/60 border border-slate-800 p-3">
+
+                    <p className="text-xs text-slate-400 mb-2">
+                      🔗 This task depends on:
+                    </p>
+
+                    {tasks.filter(
+                      (
+                        candidate: Task
+                      ) =>
+                        candidate.id !==
+                          task.id &&
+                        !candidate.completed
+                    ).length ===
+                      0 ? (
+                      <p className="text-xs text-slate-600">
+                        No other unfinished tasks available.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+
+                        {tasks
+                          .filter(
+                            (
+                              candidate: Task
+                            ) =>
+                              candidate.id !==
+                                task.id &&
+                              !candidate.completed
+                          )
+                          .map(
+                            (
+                              candidate: Task
+                            ) => {
+                              const selected =
+                                task.dependencyIds.includes(
+                                  candidate.id
+                                );
+
+                              return (
+                                <button
+                                  key={
+                                    candidate.id
+                                  }
+                                  type="button"
+                                  onClick={() =>
+                                    toggleDependency(
+                                      task.id,
+                                      candidate.id
+                                    )
+                                  }
+                                  className={`text-xs px-3 py-2 rounded-lg border transition ${
+                                    selected
+                                      ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+                                      : "bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300"
+                                  }`}
+                                >
+                                  {selected
+                                    ? "✓ "
+                                    : ""}
+                                  {
+                                    candidate.title
+                                  }
+                                </button>
+                              );
+                            }
+                          )}
+
+                      </div>
+                    )}
+
+                    {dependencyNames.length >
+                      0 && (
+                      <p className="text-xs text-purple-300 mt-2">
+                        Atlas will prioritize these dependencies before this task.
+                      </p>
+                    )}
+
+                  </div>
 
                 </div>
-
-                {/* Due Date */}
-                <div className="flex items-center gap-3 mt-2 ml-2">
-
-                  <label className="text-xs text-slate-400">
-                    📅 Due:
-                  </label>
-
-                  <input
-                    type="date"
-                    value={
-                      task.dueDate ??
-                      ""
-                    }
-                    onChange={(
-                      event
-                    ) =>
-                      changeDueDate(
-                        task.id,
-                        event.target
-                          .value
-                      )
-                    }
-                    className="rounded-lg bg-slate-800 text-slate-300 px-3 py-1 text-sm border border-slate-700 focus:outline-none focus:border-sky-500"
-                  />
-
-                </div>
-
-              </div>
-            )
+              );
+            }
           )}
 
         </div>
 
-        {/* -------------------------------------------------
-            PROGRESS
-        ------------------------------------------------- */}
+        {/* PROGRESS */}
 
         <div className="mt-6">
           <ProgressBar
@@ -1468,9 +2316,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* -------------------------------------------------
-            ADD TASK
-        ------------------------------------------------- */}
+        {/* ADD TASK */}
 
         <div className="mt-5">
           <AddTask
@@ -1482,9 +2328,7 @@ export default function Dashboard() {
 
       </DashboardCard>
 
-      {/* ---------------------------------------------------
-          FOCUS MODE
-      --------------------------------------------------- */}
+      {/* FOCUS MODE */}
 
       {focusTask && (
         <FocusMode

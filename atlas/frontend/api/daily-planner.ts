@@ -4,6 +4,10 @@ import type {
   VercelResponse,
 } from "@vercel/node";
 
+/* =======================================================
+   TYPES
+======================================================= */
+
 type Priority =
   | "high"
   | "medium"
@@ -17,14 +21,41 @@ type Category =
   | "finance"
   | "other";
 
+type PreferredTime =
+  | "anytime"
+  | "morning"
+  | "afternoon"
+  | "evening";
+
+type Recurrence =
+  | "none"
+  | "daily"
+  | "weekdays"
+  | "weekly";
+
 type PlannerTask = {
   id: number;
   title: string;
   priority: Priority;
-  duration?: number;
+  duration: number;
   category?: Category;
   dueDate?: string | null;
   completed?: boolean;
+  dependencyIds?: number[];
+  preferredTime?: PreferredTime;
+  recurrence?: Recurrence;
+  reminder?: string;
+};
+
+type AIPlanItem = {
+  id: number;
+  reason: string;
+  suggestedOrder: number;
+};
+
+type AIPlannerResponse = {
+  plan: AIPlanItem[];
+  summary: string;
 };
 
 type PlannedTask = {
@@ -34,6 +65,10 @@ type PlannedTask = {
   duration: number;
   category: Category;
   dueDate: string | null;
+  dependencyIds: number[];
+  preferredTime: PreferredTime;
+  recurrence: Recurrence;
+  reminder?: string;
   reason: string;
   suggestedOrder: number;
 };
@@ -41,132 +76,947 @@ type PlannedTask = {
 type PlannerResponse = {
   plan: PlannedTask[];
   summary: string;
-  totalScheduledMinutes?: number;
-  totalUnscheduledMinutes?: number;
+  totalScheduledMinutes: number;
+  totalUnscheduledMinutes: number;
 };
 
-/* -------------------------------------------------------
-   HELPERS
-------------------------------------------------------- */
+/* =======================================================
+   NORMALIZATION HELPERS
+======================================================= */
+
+function normalizePriority(
+  value: unknown
+): Priority {
+  if (
+    value === "high" ||
+    value === "medium" ||
+    value === "low"
+  ) {
+    return value;
+  }
+
+  return "medium";
+}
+
+function normalizeCategory(
+  value: unknown
+): Category {
+  if (
+    value === "work" ||
+    value === "study" ||
+    value === "health" ||
+    value === "personal" ||
+    value === "finance" ||
+    value === "other"
+  ) {
+    return value;
+  }
+
+  return "other";
+}
+
+function normalizePreferredTime(
+  value: unknown
+): PreferredTime {
+  if (
+    value === "morning" ||
+    value === "afternoon" ||
+    value === "evening" ||
+    value === "anytime"
+  ) {
+    return value;
+  }
+
+  return "anytime";
+}
+
+function normalizeRecurrence(
+  value: unknown
+): Recurrence {
+  if (
+    value === "daily" ||
+    value === "weekdays" ||
+    value === "weekly" ||
+    value === "none"
+  ) {
+    return value;
+  }
+
+  return "none";
+}
 
 function normalizeDuration(
-  duration: unknown
+  value: unknown
 ): number {
   if (
-    typeof duration !== "number" ||
-    !Number.isFinite(duration) ||
-    duration <= 0
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0
   ) {
     return 30;
   }
 
   return Math.min(
     Math.max(
-      Math.round(duration),
+      Math.round(value),
       5
     ),
     1440
   );
 }
 
-function normalizeCategory(
-  category: unknown
-): Category {
-  const validCategories: Category[] = [
-    "work",
-    "study",
-    "health",
-    "personal",
-    "finance",
-    "other",
-  ];
-
-  if (
-    typeof category === "string" &&
-    validCategories.includes(
-      category as Category
-    )
-  ) {
-    return category as Category;
-  }
-
-  return "other";
-}
-
-function normalizePriority(
-  priority: unknown
-): Priority {
-  if (
-    priority === "high" ||
-    priority === "medium" ||
-    priority === "low"
-  ) {
-    return priority;
-  }
-
-  return "medium";
-}
-
-function normalizeAvailableMinutes(
+function normalizeDependencyIds(
   value: unknown
-): number | null {
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
-    return null;
+): number[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  const minutes = Number(value);
+  return value
+    .map(
+      (id: unknown) =>
+        Number(id)
+    )
+    .filter(
+      (id: number) =>
+        Number.isFinite(id)
+    );
+}
 
-  if (
-    !Number.isFinite(minutes) ||
-    minutes <= 0
-  ) {
-    return null;
-  }
+/* =======================================================
+   DATE HELPERS
+======================================================= */
 
-  return Math.min(
-    Math.round(minutes),
-    1440
+function getTodayISO(): string {
+  const today =
+    new Date();
+
+  const year =
+    today.getFullYear();
+
+  const month =
+    String(
+      today.getMonth() + 1
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      today.getDate()
+    ).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getTodayString(): string {
+  return new Date().toLocaleDateString(
+    "en-IN",
+    {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }
   );
 }
 
-function formatDuration(
-  minutes: number
-): string {
-  if (minutes < 60) {
-    return `${minutes} minutes`;
+function getDueDateDistance(
+  dueDate: string | null | undefined,
+  todayISO: string
+): number {
+  if (!dueDate) {
+    return 9999;
   }
 
-  const hours = Math.floor(
-    minutes / 60
+  const due =
+    new Date(
+      `${dueDate}T00:00:00`
+    ).getTime();
+
+  const today =
+    new Date(
+      `${todayISO}T00:00:00`
+    ).getTime();
+
+  if (
+    Number.isNaN(due) ||
+    Number.isNaN(today)
+  ) {
+    return 9999;
+  }
+
+  return Math.round(
+    (due - today) /
+      (1000 * 60 * 60 * 24)
   );
-
-  const remaining =
-    minutes % 60;
-
-  if (remaining === 0) {
-    return `${hours} hour${
-      hours === 1 ? "" : "s"
-    }`;
-  }
-
-  return `${hours}h ${remaining}m`;
 }
 
-/* -------------------------------------------------------
-   API HANDLER
-------------------------------------------------------- */
+/* =======================================================
+   PRIORITY SCORING
+======================================================= */
+
+function getPriorityScore(
+  priority: Priority
+): number {
+  switch (priority) {
+    case "high":
+      return 300;
+
+    case "medium":
+      return 150;
+
+    case "low":
+      return 50;
+
+    default:
+      return 150;
+  }
+}
+
+/*
+  Higher score = more important.
+
+  Deadline is deliberately strong because:
+  - overdue = extremely important
+  - today = very important
+  - tomorrow = important
+*/
+
+function getTaskScore(
+  task: PlannerTask,
+  todayISO: string
+): number {
+  let score =
+    getPriorityScore(
+      normalizePriority(
+        task.priority
+      )
+    );
+
+  const days =
+    getDueDateDistance(
+      task.dueDate,
+      todayISO
+    );
+
+  if (days < 0) {
+    score += 1000;
+  } else if (days === 0) {
+    score += 800;
+  } else if (days === 1) {
+    score += 600;
+  } else if (days === 2) {
+    score += 400;
+  } else if (days <= 7) {
+    score += 200;
+  } else if (days < 9999) {
+    score += 100;
+  }
+
+  /*
+    Slight bonus for longer meaningful work.
+    This prevents the optimizer from filling time
+    only with many tiny tasks.
+  */
+
+  score += Math.min(
+    task.duration / 10,
+    20
+  );
+
+  return score;
+}
+
+/* =======================================================
+   AI FALLBACK ORDER
+======================================================= */
+
+function fallbackSort(
+  tasks: PlannerTask[],
+  todayISO: string
+): PlannerTask[] {
+  return [...tasks].sort(
+    (
+      a: PlannerTask,
+      b: PlannerTask
+    ) => {
+      const aScore =
+        getTaskScore(
+          a,
+          todayISO
+        );
+
+      const bScore =
+        getTaskScore(
+          b,
+          todayISO
+        );
+
+      if (
+        aScore !== bScore
+      ) {
+        return (
+          bScore -
+          aScore
+        );
+      }
+
+      return (
+        a.duration -
+        b.duration
+      );
+    }
+  );
+}
+
+/* =======================================================
+   DEPENDENCY HELPERS
+======================================================= */
+
+function createTaskMap(
+  tasks: PlannerTask[]
+): Map<number, PlannerTask> {
+  const map =
+    new Map<number, PlannerTask>();
+
+  tasks.forEach(
+    (task: PlannerTask) => {
+      map.set(
+        task.id,
+        task
+      );
+    }
+  );
+
+  return map;
+}
+
+function hasDependencyCycle(
+  task: PlannerTask,
+  taskMap: Map<
+    number,
+    PlannerTask
+  >
+): boolean {
+  const visiting =
+    new Set<number>();
+
+  function visit(
+    id: number
+  ): boolean {
+    if (
+      visiting.has(id)
+    ) {
+      return true;
+    }
+
+    const current =
+      taskMap.get(id);
+
+    if (!current) {
+      return false;
+    }
+
+    visiting.add(id);
+
+    const dependencies =
+      normalizeDependencyIds(
+        current.dependencyIds
+      );
+
+    for (
+      const dependencyId of
+        dependencies
+    ) {
+      if (
+        taskMap.has(
+          dependencyId
+        ) &&
+        visit(
+          dependencyId
+        )
+      ) {
+        return true;
+      }
+    }
+
+    visiting.delete(id);
+
+    return false;
+  }
+
+  return visit(
+    task.id
+  );
+}
+
+/*
+  Returns all dependencies required for a task.
+
+  Example:
+
+  Task C depends on B.
+  B depends on A.
+
+  Selecting C requires:
+
+  A + B + C
+*/
+
+function getDependencyClosure(
+  task: PlannerTask,
+  taskMap: Map<
+    number,
+    PlannerTask
+  >
+): Set<number> {
+  const result =
+    new Set<number>();
+
+  function collect(
+    current: PlannerTask
+  ) {
+    if (
+      result.has(
+        current.id
+      )
+    ) {
+      return;
+    }
+
+    result.add(
+      current.id
+    );
+
+    const dependencies =
+      normalizeDependencyIds(
+        current.dependencyIds
+      );
+
+    dependencies.forEach(
+      (
+        dependencyId: number
+      ) => {
+        const dependency =
+          taskMap.get(
+            dependencyId
+          );
+
+        if (dependency) {
+          collect(
+            dependency
+          );
+        }
+      }
+    );
+  }
+
+  collect(task);
+
+  return result;
+}
+
+/* =======================================================
+   CAPACITY OPTIMIZER
+======================================================= */
+
+/*
+  This is the important part.
+
+  We don't simply take tasks one-by-one.
+
+  Instead we evaluate combinations and choose the
+  combination that:
+
+  1. Fits inside available time.
+  2. Uses as much time as possible.
+  3. Then maximizes priority/deadline score.
+  4. Respects dependencies.
+
+  Example:
+
+  Available = 240 minutes
+
+  BESS = 120
+  GATE = 120
+  Gym  = 60
+
+  BESS + Gym = 180
+  BESS + GATE = 240
+
+  Therefore:
+
+  BESS + GATE wins.
+*/
+
+type CandidateSelection = {
+  ids: Set<number>;
+  minutes: number;
+  score: number;
+};
+
+function compareSelections(
+  a: CandidateSelection,
+  b: CandidateSelection
+): CandidateSelection {
+  /*
+    First maximize time utilization.
+  */
+
+  if (
+    a.minutes !==
+    b.minutes
+  ) {
+    return a.minutes >
+      b.minutes
+      ? a
+      : b;
+  }
+
+  /*
+    If both use the same amount of time,
+    choose the higher-value combination.
+  */
+
+  if (
+    a.score !==
+    b.score
+  ) {
+    return a.score >
+      b.score
+      ? a
+      : b;
+  }
+
+  return a;
+}
+
+function optimizeTasks(
+  tasks: PlannerTask[],
+  availableMinutes: number,
+  todayISO: string
+): Set<number> {
+  const taskMap =
+    createTaskMap(
+      tasks
+    );
+
+  /*
+    For a normal personal task list, there will usually
+    be far fewer than 20 tasks.
+
+    Exhaustive combination search gives the best result
+    for small lists.
+
+    For larger lists, use a greedy fallback so the
+    API doesn't become exponentially expensive.
+  */
+
+  if (
+    tasks.length <= 20
+  ) {
+    let best: CandidateSelection =
+      {
+        ids: new Set<number>(),
+        minutes: 0,
+        score: 0,
+      };
+
+    const total =
+      1 << tasks.length;
+
+    for (
+      let mask = 1;
+      mask < total;
+      mask++
+    ) {
+      const selected =
+        new Set<number>();
+
+      let minutes = 0;
+      let score = 0;
+
+      let valid = true;
+
+      for (
+        let index = 0;
+        index <
+          tasks.length;
+        index++
+      ) {
+        if (
+          (mask &
+            (1 << index)) ===
+          0
+        ) {
+          continue;
+        }
+
+        const task =
+          tasks[index];
+
+        /*
+          Ignore circular dependency tasks.
+        */
+
+        if (
+          hasDependencyCycle(
+            task,
+            taskMap
+          )
+        ) {
+          valid = false;
+          break;
+        }
+
+        const closure =
+          getDependencyClosure(
+            task,
+            taskMap
+          );
+
+        closure.forEach(
+          (id: number) => {
+            selected.add(
+              id
+            );
+          }
+        );
+      }
+
+      if (!valid) {
+        continue;
+      }
+
+      /*
+        Calculate the actual duration of the complete
+        dependency closure.
+      */
+
+      selected.forEach(
+        (id: number) => {
+          const task =
+            taskMap.get(id);
+
+          if (!task) {
+            return;
+          }
+
+          minutes +=
+            normalizeDuration(
+              task.duration
+            );
+
+          score +=
+            getTaskScore(
+              task,
+              todayISO
+            );
+        }
+      );
+
+      if (
+        minutes >
+        availableMinutes
+      ) {
+        continue;
+      }
+
+      const candidate: CandidateSelection =
+        {
+          ids: selected,
+          minutes,
+          score,
+        };
+
+      best =
+        compareSelections(
+          candidate,
+          best
+        );
+    }
+
+    return best.ids;
+  }
+
+  /*
+    Greedy fallback for very large task lists.
+  */
+
+  const sorted =
+    fallbackSort(
+      tasks,
+      todayISO
+    );
+
+  const selected =
+    new Set<number>();
+
+  let usedMinutes = 0;
+
+  for (
+    const task of sorted
+  ) {
+    const closure =
+      getDependencyClosure(
+        task,
+        taskMap
+      );
+
+    let closureMinutes = 0;
+
+    closure.forEach(
+      (id: number) => {
+        if (
+          selected.has(id)
+        ) {
+          return;
+        }
+
+        const dependency =
+          taskMap.get(id);
+
+        if (dependency) {
+          closureMinutes +=
+            normalizeDuration(
+              dependency.duration
+            );
+        }
+      }
+    );
+
+    if (
+      usedMinutes +
+        closureMinutes <=
+      availableMinutes
+    ) {
+      closure.forEach(
+        (id: number) => {
+          selected.add(
+            id
+          );
+        }
+      );
+
+      usedMinutes +=
+        closureMinutes;
+    }
+  }
+
+  return selected;
+}
+
+/* =======================================================
+   ORDER SELECTED TASKS
+======================================================= */
+
+function topologicalSort(
+  tasks: PlannerTask[],
+  preferredOrder: PlannerTask[]
+): PlannerTask[] {
+  const taskMap =
+    createTaskMap(
+      tasks
+    );
+
+  const preferredIndex =
+    new Map<number, number>();
+
+  preferredOrder.forEach(
+    (
+      task: PlannerTask,
+      index: number
+    ) => {
+      preferredIndex.set(
+        task.id,
+        index
+      );
+    }
+  );
+
+  const result: PlannerTask[] =
+    [];
+
+  const visited =
+    new Set<number>();
+
+  const visiting =
+    new Set<number>();
+
+  function visit(
+    task: PlannerTask
+  ) {
+    if (
+      visited.has(
+        task.id
+      )
+    ) {
+      return;
+    }
+
+    /*
+      Circular dependencies are ignored safely.
+    */
+
+    if (
+      visiting.has(
+        task.id
+      )
+    ) {
+      return;
+    }
+
+    visiting.add(
+      task.id
+    );
+
+    const dependencies =
+      normalizeDependencyIds(
+        task.dependencyIds
+      );
+
+    const sortedDependencies =
+      dependencies
+        .map(
+          (
+            id: number
+          ) =>
+            taskMap.get(id)
+        )
+        .filter(
+          (
+            dependency:
+              | PlannerTask
+              | undefined
+          ): dependency is PlannerTask =>
+            Boolean(
+              dependency
+            )
+        )
+        .sort(
+          (
+            a: PlannerTask,
+            b: PlannerTask
+          ) =>
+            (preferredIndex.get(
+              a.id
+            ) ?? 9999) -
+            (preferredIndex.get(
+              b.id
+            ) ?? 9999)
+        );
+
+    sortedDependencies.forEach(
+      (
+        dependency: PlannerTask
+      ) => {
+        visit(
+          dependency
+        );
+      }
+    );
+
+    visiting.delete(
+      task.id
+    );
+
+    visited.add(
+      task.id
+    );
+
+    result.push(
+      task
+    );
+  }
+
+  tasks.forEach(
+    (
+      task: PlannerTask
+    ) => {
+      visit(task);
+    }
+  );
+
+  return result;
+}
+
+/* =======================================================
+   CREATE PLANNED TASK
+======================================================= */
+
+function createPlannedTask(
+  task: PlannerTask,
+  reason: string,
+  order: number
+): PlannedTask {
+  return {
+    id: task.id,
+
+    title:
+      task.title,
+
+    priority:
+      normalizePriority(
+        task.priority
+      ),
+
+    duration:
+      normalizeDuration(
+        task.duration
+      ),
+
+    category:
+      normalizeCategory(
+        task.category
+      ),
+
+    dueDate:
+      task.dueDate ??
+      null,
+
+    dependencyIds:
+      normalizeDependencyIds(
+        task.dependencyIds
+      ),
+
+    preferredTime:
+      normalizePreferredTime(
+        task.preferredTime
+      ),
+
+    recurrence:
+      normalizeRecurrence(
+        task.recurrence
+      ),
+
+    reminder:
+      task.reminder,
+
+    reason,
+
+    suggestedOrder:
+      order,
+  };
+}
+
+/* =======================================================
+   MAIN API HANDLER
+======================================================= */
 
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse
 ) {
-  if (req.method !== "POST") {
+  /*
+    Only POST.
+  */
+
+  if (
+    req.method !==
+    "POST"
+  ) {
     return res.status(405).json({
-      error: "Method not allowed",
+      error:
+        "Method not allowed",
     });
   }
 
@@ -191,33 +1041,54 @@ export default async function handler(
     }
 
     /* ---------------------------------------------------
-       INPUT
+       INPUT TASKS
     --------------------------------------------------- */
 
-    const tasks =
-      req.body?.tasks as PlannerTask[];
+    const incomingTasks =
+      req.body?.tasks;
 
-    if (!Array.isArray(tasks)) {
+    if (
+      !Array.isArray(
+        incomingTasks
+      )
+    ) {
       return res.status(400).json({
         error:
           "Tasks must be provided as an array.",
       });
     }
 
-    /*
-      Available time is optional.
+    /* ---------------------------------------------------
+       AVAILABLE TIME
+    --------------------------------------------------- */
 
-      Examples:
+    const rawAvailableMinutes =
+      req.body
+        ?.availableMinutes;
 
-      60  = 1 hour
-      120 = 2 hours
-      240 = 4 hours
-    */
+    let availableMinutes:
+      | number
+      | null =
+      null;
 
-    const availableMinutes =
-      normalizeAvailableMinutes(
-        req.body?.availableMinutes
-      );
+    if (
+      typeof rawAvailableMinutes ===
+        "number" &&
+      Number.isFinite(
+        rawAvailableMinutes
+      )
+    ) {
+      availableMinutes =
+        Math.min(
+          Math.max(
+            Math.round(
+              rawAvailableMinutes
+            ),
+            0
+          ),
+          1440
+        );
+    }
 
     console.log(
       "Available minutes:",
@@ -225,44 +1096,110 @@ export default async function handler(
     );
 
     /* ---------------------------------------------------
-       ACTIVE TASKS
+       NORMALIZE TASKS
+    --------------------------------------------------- */
+
+    const allTasks: PlannerTask[] =
+      incomingTasks
+        .map(
+          (
+            task: PlannerTask
+          ) => ({
+            id:
+              Number(
+                task.id
+              ),
+
+            title:
+              typeof task.title ===
+              "string"
+                ? task.title.trim()
+                : "Untitled task",
+
+            priority:
+              normalizePriority(
+                task.priority
+              ),
+
+            duration:
+              normalizeDuration(
+                task.duration
+              ),
+
+            category:
+              normalizeCategory(
+                task.category
+              ),
+
+            dueDate:
+              typeof task.dueDate ===
+                  "string" &&
+                task.dueDate
+                ? task.dueDate
+                : null,
+
+            completed:
+              Boolean(
+                task.completed
+              ),
+
+            dependencyIds:
+              normalizeDependencyIds(
+                task.dependencyIds
+              ),
+
+            preferredTime:
+              normalizePreferredTime(
+                task.preferredTime
+              ),
+
+            recurrence:
+              normalizeRecurrence(
+                task.recurrence
+              ),
+
+            reminder:
+              typeof task.reminder ===
+              "string"
+                ? task.reminder
+                : undefined,
+          })
+        )
+        .filter(
+          (
+            task: PlannerTask
+          ) =>
+            Number.isFinite(
+              task.id
+            ) &&
+            task.title.length >
+              0
+        );
+
+    /* ---------------------------------------------------
+       REMOVE COMPLETED TASKS
     --------------------------------------------------- */
 
     const activeTasks =
-      tasks
-        .filter(
-          (task) =>
-            task &&
-            !task.completed
-        )
-        .map((task) => ({
-          ...task,
+      allTasks.filter(
+        (
+          task: PlannerTask
+        ) =>
+          !task.completed
+      );
 
-          priority:
-            normalizePriority(
-              task.priority
-            ),
-
-          duration:
-            normalizeDuration(
-              task.duration
-            ),
-
-          category:
-            normalizeCategory(
-              task.category
-            ),
-
-          dueDate:
-            task.dueDate ?? null,
-        }));
-
-    if (activeTasks.length === 0) {
+    if (
+      activeTasks.length ===
+      0
+    ) {
       return res.status(200).json({
         plan: [],
+
         summary:
           "You have no unfinished tasks. Your day is clear!",
+
         totalScheduledMinutes: 0,
+
         totalUnscheduledMinutes: 0,
       });
     }
@@ -271,139 +1208,31 @@ export default async function handler(
        TOTAL WORK
     --------------------------------------------------- */
 
-    const totalTaskMinutes =
+    const totalWorkMinutes =
       activeTasks.reduce(
-        (total, task) =>
-          total + task.duration,
+        (
+          total: number,
+          task: PlannerTask
+        ) =>
+          total +
+          task.duration,
         0
       );
 
-    console.log(
-      "Active tasks:",
-      activeTasks.length
-    );
-
-    console.log(
-      "Total task duration:",
-      formatDuration(
-        totalTaskMinutes
-      )
-    );
-
-    /* ---------------------------------------------------
-       DATE
-    --------------------------------------------------- */
-
-    const today =
-      new Date();
+    const todayISO =
+      getTodayISO();
 
     const todayString =
-      today.toLocaleDateString(
-        "en-IN",
-        {
-          weekday: "long",
-          year: "numeric",
-          month: "long",
-          day: "numeric",
-        }
-      );
+      getTodayString();
 
     /* ---------------------------------------------------
-       GEMINI
+       ASK GEMINI FOR IDEAL ORDER
     --------------------------------------------------- */
 
-    const ai = new GoogleGenAI({
-      apiKey,
-    });
-
-    /*
-      When available time exists, Atlas gets a stronger
-      optimization instruction.
-
-      The key idea:
-
-      PRIORITY + DEADLINE + FIT + TIME UTILIZATION
-    */
-
-    const availableTimeRules =
-      availableMinutes !== null
-        ? `
-AVAILABLE TIME MODE IS ACTIVE.
-
-The user has:
-
-${formatDuration(
-  availableMinutes
-)}
-
-available today.
-
-This is a HARD upper limit.
-
-The selected tasks MUST NOT exceed the available time.
-
-However, do NOT simply stop after selecting the
-first urgent task.
-
-Try to use as much of the available time as
-reasonably possible.
-
-For example:
-
-Available = 240 minutes
-
-Tasks:
-- 120 min
-- 120 min
-- 60 min
-
-A 240-minute combination should be preferred
-over a 180-minute combination when the priority
-and deadline difference is not significant.
-
-IMPORTANT:
-
-- Never split a task.
-- Never shorten a task.
-- A 120-minute task requires 120 minutes.
-- A task is either selected completely or not selected.
-- Prefer combinations that use more of the available time.
-- Do not exceed the available time.
-- Leaving a small amount unused is acceptable when
-  no suitable task fits.
-- Do not choose a clearly low-value task merely to
-  fill a few minutes.
-- Deadline urgency remains more important than simply
-  filling every minute.
-
-Think of the problem as:
-
-"Choose the best complete tasks that fit inside the
-available-time limit."
-
-The goal is NOT simply maximum duration.
-
-The goal is:
-
-1. Urgency
-2. Deadline
-3. Priority
-4. Practical task value
-5. Efficient use of available time
-`
-        : `
-AVAILABLE TIME MODE IS NOT ACTIVE.
-
-The user did not specify a time limit.
-
-Create the best ordering of all unfinished tasks.
-
-Every unfinished task should be included.
-`;
-
-    /* ---------------------------------------------------
-       GEMINI REQUEST
-    --------------------------------------------------- */
+    const ai =
+      new GoogleGenAI({
+        apiKey,
+      });
 
     console.log(
       "Sending tasks to Gemini planner..."
@@ -416,69 +1245,57 @@ Every unfinished task should be included.
             "gemini-3.6-flash",
 
           contents: `
-You are Atlas, an intelligent personal productivity assistant.
+You are Atlas, an intelligent personal productivity planner.
 
-Today is:
+Today's date:
 
 ${todayString}
 
-Your job is to create the best realistic plan from
-the user's unfinished tasks.
+ISO date:
 
-${availableTimeRules}
+${todayISO}
 
-GENERAL PLANNING RULES:
+Your job is to create the IDEAL PRIORITY ORDER of the user's unfinished tasks.
 
-1. Overdue tasks receive very high urgency.
+IMPORTANT RULES:
 
-2. Tasks due today generally come before tasks due
-   tomorrow.
+1. High-priority tasks should generally come before medium-priority tasks.
 
-3. Tasks due tomorrow generally come before tasks
-   with later deadlines.
+2. Medium-priority tasks should generally come before low-priority tasks.
 
-4. High priority tasks generally come before medium
-   priority tasks.
+3. Earlier due dates should generally come before later due dates.
 
-5. Medium priority tasks generally come before low
-   priority tasks.
+4. Overdue tasks are extremely urgent.
 
-6. A close deadline can outrank a higher-priority
-   task with a much later deadline.
+5. Tasks due today are extremely important.
 
-7. Consider the task category.
+6. Tasks due tomorrow should normally be strongly prioritized.
 
-8. Avoid unnecessary context switching where practical.
+7. Respect dependencies.
 
-9. Study tasks can be grouped when useful.
+8. A task that depends on another task should come after that dependency.
 
-10. Work/deep-focus tasks can be placed earlier when
-    they require concentration.
+9. Do not invent tasks.
 
-11. Health tasks can be placed after demanding
-    cognitive work when appropriate.
+10. Do not remove tasks.
 
-12. Do not invent tasks.
+11. Do not change IDs.
 
-13. Do not change task IDs.
+12. Do not change titles.
 
-14. Do not change task titles.
+13. Do not change durations.
 
-15. Do not change task durations.
+14. Every unfinished task must appear exactly once.
 
-16. Do not change task priorities.
+15. suggestedOrder must start at 1.
 
-17. Do not change task categories.
+16. Give a short practical reason for each task.
 
-18. Do not partially schedule tasks.
+17. The order should be useful for a real human completing their day.
 
-19. Every selected task must appear exactly once.
+18. Do not calculate available-time scheduling. The server will handle that separately.
 
-20. suggestedOrder must start at 1.
-
-21. The final result is an ORDER of existing tasks.
-
-USER'S UNFINISHED TASKS:
+USER TASKS:
 
 ${JSON.stringify(
   activeTasks,
@@ -486,66 +1303,19 @@ ${JSON.stringify(
   2
 )}
 
-TOTAL UNFINISHED WORK:
-
-${formatDuration(
-  totalTaskMinutes
-)}
-
-AVAILABLE TIME:
-
-${
-  availableMinutes !== null
-    ? formatDuration(
-        availableMinutes
-      )
-    : "Not specified"
-}
-
-Return JSON using exactly this structure:
+Return exactly:
 
 {
   "plan": [
     {
       "id": 123,
-      "title": "Task title",
-      "priority": "high",
-      "duration": 120,
-      "category": "work",
-      "dueDate": "2026-08-21",
       "reason": "Short practical reason.",
       "suggestedOrder": 1
     }
   ],
-  "summary": "Short explanation of the recommended plan.",
-  "totalScheduledMinutes": 240,
-  "totalUnscheduledMinutes": 60
+  "summary": "Short explanation of the recommended order."
 }
-
-Priority must be:
-
-high
-medium
-low
-
-Category must be:
-
-work
-study
-health
-personal
-finance
-other
-
-Duration is always in minutes.
-
-If available time is specified:
-
-- totalScheduledMinutes MUST NOT exceed available time
-- selected tasks must be complete tasks
-- try to make good use of available time
-- do not invent shorter durations
-        `,
+          `,
 
           config: {
             responseMimeType:
@@ -566,42 +1336,6 @@ If available time is specified:
                         type: "number",
                       },
 
-                      title: {
-                        type: "string",
-                      },
-
-                      priority: {
-                        type: "string",
-                        enum: [
-                          "high",
-                          "medium",
-                          "low",
-                        ],
-                      },
-
-                      duration: {
-                        type: "number",
-                      },
-
-                      category: {
-                        type: "string",
-                        enum: [
-                          "work",
-                          "study",
-                          "health",
-                          "personal",
-                          "finance",
-                          "other",
-                        ],
-                      },
-
-                      dueDate: {
-                        type: [
-                          "string",
-                          "null",
-                        ],
-                      },
-
                       reason: {
                         type: "string",
                       },
@@ -613,11 +1347,6 @@ If available time is specified:
 
                     required: [
                       "id",
-                      "title",
-                      "priority",
-                      "duration",
-                      "category",
-                      "dueDate",
                       "reason",
                       "suggestedOrder",
                     ],
@@ -627,280 +1356,450 @@ If available time is specified:
                 summary: {
                   type: "string",
                 },
-
-                totalScheduledMinutes: {
-                  type: "number",
-                },
-
-                totalUnscheduledMinutes: {
-                  type: "number",
-                },
               },
 
               required: [
                 "plan",
                 "summary",
-                "totalScheduledMinutes",
-                "totalUnscheduledMinutes",
               ],
             },
           },
         }
       );
 
-    /* ---------------------------------------------------
-       RESPONSE
-    --------------------------------------------------- */
-
-    console.log(
-      "Gemini planner response received."
-    );
-
     const outputText =
-      response.text ?? "";
+      response.text ??
+      "";
 
-    if (!outputText) {
+    if (
+      !outputText
+    ) {
       throw new Error(
         "Gemini returned an empty planner response."
       );
     }
 
-    const result =
-      JSON.parse(
-        outputText
-      ) as PlannerResponse;
+    let aiResult:
+      AIPlannerResponse;
 
-    if (!Array.isArray(result.plan)) {
+    try {
+      aiResult =
+        JSON.parse(
+          outputText
+        ) as AIPlannerResponse;
+    } catch {
+      throw new Error(
+        "Atlas returned invalid planner JSON."
+      );
+    }
+
+    if (
+      !Array.isArray(
+        aiResult.plan
+      )
+    ) {
       throw new Error(
         "Invalid planner response."
       );
     }
 
     /* ---------------------------------------------------
-       ORIGINAL TASK LOOKUP
+       CLEAN AI ORDER
     --------------------------------------------------- */
 
-    const taskMap =
-      new Map(
+    const activeIds =
+      new Set<number>(
         activeTasks.map(
-          (task) => [
-            task.id,
-            task,
-          ]
+          (
+            task: PlannerTask
+          ) =>
+            task.id
         )
       );
 
+    const seenIds =
+      new Set<number>();
+
+    const aiItems =
+      aiResult.plan
+        .filter(
+          (
+            item: AIPlanItem
+          ) =>
+            activeIds.has(
+              item.id
+            )
+        )
+        .filter(
+          (
+            item: AIPlanItem
+          ) => {
+            if (
+              seenIds.has(
+                item.id
+              )
+            ) {
+              return false;
+            }
+
+            seenIds.add(
+              item.id
+            );
+
+            return true;
+          }
+        )
+        .sort(
+          (
+            a: AIPlanItem,
+            b: AIPlanItem
+          ) =>
+            a.suggestedOrder -
+            b.suggestedOrder
+        );
+
     /* ---------------------------------------------------
-       REMOVE INVALID TASKS
+       ADD MISSING TASKS
     --------------------------------------------------- */
 
-    const validPlan =
-      result.plan.filter(
-        (task) =>
-          taskMap.has(
+    const missingTasks =
+      activeTasks.filter(
+        (
+          task: PlannerTask
+        ) =>
+          !seenIds.has(
+            task.id
+          )
+      );
+
+    const fallbackMissing =
+      fallbackSort(
+        missingTasks,
+        todayISO
+      );
+
+    fallbackMissing.forEach(
+      (
+        task: PlannerTask
+      ) => {
+        aiItems.push({
+          id: task.id,
+
+          reason:
+            "Added automatically because this unfinished task was missing from the AI ordering.",
+
+          suggestedOrder:
+            aiItems.length +
+            1,
+        });
+      }
+    );
+
+    /* ---------------------------------------------------
+       MAP AI REASONS
+    --------------------------------------------------- */
+
+    const reasonMap =
+      new Map<
+        number,
+        string
+      >();
+
+    aiItems.forEach(
+      (
+        item: AIPlanItem
+      ) => {
+        reasonMap.set(
+          item.id,
+          item.reason
+        );
+      }
+    );
+
+    /* ---------------------------------------------------
+       PREFERRED TASK ORDER
+    --------------------------------------------------- */
+
+    const taskMap =
+      createTaskMap(
+        activeTasks
+      );
+
+    const preferredOrder =
+      aiItems
+        .map(
+          (
+            item: AIPlanItem
+          ) =>
+            taskMap.get(
+              item.id
+            )
+        )
+        .filter(
+          (
+            task:
+              | PlannerTask
+              | undefined
+          ): task is PlannerTask =>
+            Boolean(task)
+        );
+
+    /* ---------------------------------------------------
+       NO AVAILABLE-TIME LIMIT
+    --------------------------------------------------- */
+
+    let selectedIds:
+      Set<number>;
+
+    if (
+      availableMinutes ===
+      null
+    ) {
+      selectedIds =
+        new Set<number>(
+          activeTasks.map(
+            (
+              task: PlannerTask
+            ) =>
+              task.id
+          )
+        );
+    } else {
+      /* -------------------------------------------------
+         CAPACITY OPTIMIZATION
+      ------------------------------------------------- */
+
+      selectedIds =
+        optimizeTasks(
+          activeTasks,
+          availableMinutes,
+          todayISO
+        );
+    }
+
+    /* ---------------------------------------------------
+       SELECT TASKS
+    --------------------------------------------------- */
+
+    const selectedTasks =
+      activeTasks.filter(
+        (
+          task: PlannerTask
+        ) =>
+          selectedIds.has(
             task.id
           )
       );
 
     /* ---------------------------------------------------
-       REMOVE DUPLICATES
+       ORDER SELECTED TASKS
     --------------------------------------------------- */
 
-    const seenIds =
-      new Set<number>();
-
-    const uniquePlan =
-      validPlan.filter(
-        (task) => {
-          if (
-            seenIds.has(
-              task.id
-            )
-          ) {
-            return false;
-          }
-
-          seenIds.add(
-            task.id
-          );
-
-          return true;
-        }
+    const orderedSelectedTasks =
+      topologicalSort(
+        selectedTasks,
+        preferredOrder
       );
 
-    /* ---------------------------------------------------
-       SORT BY AI ORDER
-    --------------------------------------------------- */
+    /*
+      Make sure selected tasks are still ordered according
+      to the AI preference where dependencies don't force
+      a different order.
+    */
 
-    uniquePlan.sort(
-      (a, b) =>
-        a.suggestedOrder -
-        b.suggestedOrder
+    const preferredIndex =
+      new Map<number, number>();
+
+    preferredOrder.forEach(
+      (
+        task: PlannerTask,
+        index: number
+      ) => {
+        preferredIndex.set(
+          task.id,
+          index
+        );
+      }
     );
 
+    /*
+      The topological sort already guarantees dependencies.
+      We therefore keep its result.
+    */
+
     /* ---------------------------------------------------
-       RESTORE ORIGINAL DATA
+       BUILD FINAL PLAN
     --------------------------------------------------- */
 
-    let finalPlan =
-      uniquePlan.map(
-        (plannedTask) => {
-          const original =
-            taskMap.get(
-              plannedTask.id
-            )!;
+    const finalPlan:
+      PlannedTask[] =
+      orderedSelectedTasks.map(
+        (
+          task: PlannerTask,
+          index: number
+        ) =>
+          createPlannedTask(
+            task,
 
-          return {
-            id: original.id,
+            reasonMap.get(
+              task.id
+            ) ??
+              "Recommended based on priority, deadline and available time.",
 
-            title:
-              original.title,
-
-            priority:
-              original.priority,
-
-            duration:
-              original.duration,
-
-            category:
-              original.category,
-
-            dueDate:
-              original.dueDate ??
-              null,
-
-            reason:
-              plannedTask.reason?.trim() ||
-              "This task was selected for today's plan.",
-
-            suggestedOrder:
-              plannedTask.suggestedOrder,
-          };
-        }
+            index + 1
+          )
       );
 
     /* ---------------------------------------------------
-       HARD TIME SAFETY
-    --------------------------------------------------- */
-
-    if (
-      availableMinutes !== null
-    ) {
-      let usedMinutes = 0;
-
-      const safePlan:
-        PlannedTask[] = [];
-
-      for (const task of finalPlan) {
-        /*
-          Never allow the final server response
-          to exceed the user's available time.
-        */
-
-        if (
-          usedMinutes +
-            task.duration <=
-          availableMinutes
-        ) {
-          safePlan.push(
-            task
-          );
-
-          usedMinutes +=
-            task.duration;
-        }
-      }
-
-      finalPlan =
-        safePlan;
-    }
-
-    /* ---------------------------------------------------
-       RE-NUMBER ORDER
-    --------------------------------------------------- */
-
-    finalPlan =
-      finalPlan.map(
-        (task, index) => ({
-          ...task,
-          suggestedOrder:
-            index + 1,
-        })
-      );
-
-    /* ---------------------------------------------------
-       CALCULATE ACTUAL TIME
+       CALCULATE TOTALS
     --------------------------------------------------- */
 
     const totalScheduledMinutes =
       finalPlan.reduce(
-        (total, task) =>
-          total + task.duration,
+        (
+          total: number,
+          task: PlannedTask
+        ) =>
+          total +
+          task.duration,
         0
       );
 
     const totalUnscheduledMinutes =
       Math.max(
-        totalTaskMinutes -
-          totalScheduledMinutes,
-        0
+        0,
+        totalWorkMinutes -
+          totalScheduledMinutes
       );
 
     /* ---------------------------------------------------
        SUMMARY
     --------------------------------------------------- */
 
-    let summary =
-      typeof result.summary ===
-        "string" &&
-      result.summary.trim()
-        ? result.summary.trim()
-        : "Atlas created your recommended plan for today.";
+   /* ---------------------------------------------------
+   SUMMARY
+--------------------------------------------------- */
+
+function formatMinutes(
+  minutes: number
+): string {
+  const hours = Math.floor(
+    minutes / 60
+  );
+
+  const remainingMinutes =
+    minutes % 60;
+
+  if (hours === 0) {
+    return `${remainingMinutes} minutes`;
+  }
+
+  if (remainingMinutes === 0) {
+    return `${hours} ${
+      hours === 1
+        ? "hour"
+        : "hours"
+    }`;
+  }
+
+  return `${hours} ${
+    hours === 1
+      ? "hour"
+      : "hours"
+  } ${remainingMinutes} minutes`;
+}
+
+function getPlanSummary(
+  plan: PlannedTask[],
+  availableMinutes:
+    | number
+    | null,
+  totalUnscheduledMinutes: number
+): string {
+  if (plan.length === 0) {
+    return availableMinutes !==
+      null
+      ? `None of your unfinished tasks fit within the available ${formatMinutes(
+          availableMinutes
+        )}.`
+      : "You have unfinished tasks, but Atlas could not create a schedule.";
+  }
+
+  const firstTask =
+    plan[0];
+
+  const secondTask =
+    plan[1];
+
+  let summary =
+    `Atlas scheduled ${firstTask.title}`;
+
+  if (secondTask) {
+    summary += `, followed by ${secondTask.title}`;
+  }
+
+  if (plan.length > 2) {
+    summary += `, and ${plan.length - 2} more task${
+      plan.length - 2 === 1
+        ? ""
+        : "s"
+    }`;
+  }
+
+  if (
+    availableMinutes !==
+    null
+  ) {
+    const scheduledMinutes =
+      plan.reduce(
+        (
+          total: number,
+          task: PlannedTask
+        ) =>
+          total +
+          task.duration,
+        0
+      );
+
+    summary += `, using ${formatMinutes(
+      scheduledMinutes
+    )} of your available ${formatMinutes(
+      availableMinutes
+    )}.`;
 
     if (
-      availableMinutes !== null
+      totalUnscheduledMinutes >
+      0
     ) {
-      const remainingMinutes =
-        Math.max(
-          availableMinutes -
-            totalScheduledMinutes,
-          0
-        );
-
-      if (
-        totalScheduledMinutes ===
-        availableMinutes
-      ) {
-        summary += ` Atlas filled all ${formatDuration(
-          availableMinutes
-        )} of your available time.`;
-      } else if (
-        remainingMinutes > 0
-      ) {
-        summary += ` Atlas scheduled ${formatDuration(
-          totalScheduledMinutes
-        )} and left ${formatDuration(
-          remainingMinutes
-        )} available because no additional complete task was a suitable fit.`;
-      }
-
-      if (
-        totalUnscheduledMinutes >
-        0
-      ) {
-        summary += ` ${formatDuration(
-          totalUnscheduledMinutes
-        )} of total task work remains unscheduled.`;
-      }
+      summary += ` ${formatMinutes(
+        totalUnscheduledMinutes
+      )} of work remains unscheduled.`;
+    } else {
+      summary +=
+        " All unfinished work fits within your available time.";
     }
+  } else {
+    summary +=
+      ". All unfinished tasks were included because no daily time limit was provided.";
+  }
 
+  return summary;
+}
+
+const summary =
+  getPlanSummary(
+    finalPlan,
+    availableMinutes,
+    totalUnscheduledMinutes
+  );
     /* ---------------------------------------------------
-       FINAL RESULT
+       FINAL RESPONSE
     --------------------------------------------------- */
 
-    const finalResult:
+    const result:
       PlannerResponse = {
-      plan: finalPlan,
+      plan:
+        finalPlan,
 
       summary,
 
@@ -910,16 +1809,22 @@ If available time is specified:
     };
 
     console.log(
-      "Final Atlas daily plan:",
-      finalResult
+      "Final Atlas planner result:",
+      JSON.stringify(
+        result,
+        null,
+        2
+      )
     );
 
     return res.status(200).json(
-      finalResult
+      result
     );
-  } catch (error: unknown) {
+  } catch (
+    error: unknown
+  ) {
     console.error(
-      "ATLAS PLANNER ERROR:",
+      "ATLAS DAILY PLANNER ERROR:",
       error
     );
 
