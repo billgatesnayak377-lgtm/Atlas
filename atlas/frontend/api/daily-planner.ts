@@ -33,6 +33,8 @@ type Recurrence =
   | "weekdays"
   | "weekly";
 
+type PlannerMemory = string;
+
 type PlannerTask = {
   id: number;
   title: string;
@@ -285,7 +287,8 @@ function getPriorityScore(
 
 function getTaskScore(
   task: PlannerTask,
-  todayISO: string
+  todayISO: string,
+  memories: PlannerMemory[] = []
 ): number {
   let score =
     getPriorityScore(
@@ -325,6 +328,12 @@ function getTaskScore(
     20
   );
 
+  const memoryText = memories.join(" ").toLowerCase();
+  const preferred = task.preferredTime ?? "anytime";
+  if (preferred !== "anytime" && memoryText.includes(preferred)) {
+    score += 35;
+  }
+
   return score;
 }
 
@@ -334,7 +343,8 @@ function getTaskScore(
 
 function fallbackSort(
   tasks: PlannerTask[],
-  todayISO: string
+  todayISO: string,
+  memories: PlannerMemory[] = []
 ): PlannerTask[] {
   return [...tasks].sort(
     (
@@ -344,13 +354,15 @@ function fallbackSort(
       const aScore =
         getTaskScore(
           a,
-          todayISO
+          todayISO,
+          memories
         );
 
       const bScore =
         getTaskScore(
           b,
-          todayISO
+          todayISO,
+          memories
         );
 
       if (
@@ -595,7 +607,8 @@ function compareSelections(
 function optimizeTasks(
   tasks: PlannerTask[],
   availableMinutes: number,
-  todayISO: string
+  todayISO: string,
+  memories: PlannerMemory[] = []
 ): Set<number> {
   const taskMap =
     createTaskMap(
@@ -711,7 +724,8 @@ function optimizeTasks(
           score +=
             getTaskScore(
               task,
-              todayISO
+              todayISO,
+              memories
             );
         }
       );
@@ -747,7 +761,8 @@ function optimizeTasks(
   const sorted =
     fallbackSort(
       tasks,
-      todayISO
+      todayISO,
+      memories
     );
 
   const selected =
@@ -1091,12 +1106,9 @@ export default async function handler(
       Boolean(apiKey)
     );
 
-    if (!apiKey) {
-      return res.status(500).json({
-        error:
-          "GEMINI_API_KEY is not configured.",
-      });
-    }
+    // Gemini is optional for daily planning. Atlas has a
+    // deterministic local fallback, so a missing key must not
+    // break Available Time planning.
 
     /* ---------------------------------------------------
        INPUT TASKS
@@ -1123,6 +1135,23 @@ export default async function handler(
     const rawAvailableMinutes =
       req.body
         ?.availableMinutes;
+
+    /* ---------------------------------------------------
+       ATLAS MEMORY
+    --------------------------------------------------- */
+
+    const incomingMemories =
+      req.body?.memories;
+
+    const memories: PlannerMemory[] =
+      Array.isArray(incomingMemories)
+        ? incomingMemories
+            .filter(
+              (memory: unknown): memory is string =>
+                typeof memory === "string"
+            )
+            .slice(0, 50)
+        : [];
 
     let availableMinutes:
       | number
@@ -1285,24 +1314,48 @@ export default async function handler(
 
     /* ---------------------------------------------------
        ASK GEMINI FOR IDEAL ORDER
+
+       IMPORTANT: Gemini is an enhancement, not a hard
+       dependency. If the AI call fails, Atlas falls back to
+       the local priority/deadline/dependency ordering so the
+       Available Time planner still works.
     --------------------------------------------------- */
 
-    const ai =
-      new GoogleGenAI({
-        apiKey,
-      });
+    let aiResult: AIPlannerResponse = {
+      plan: fallbackSort(
+        activeTasks,
+        todayISO,
+        memories
+      ).map(
+        (task: PlannerTask, index: number) => ({
+          id: task.id,
+          reason:
+            "Selected using Atlas priority, deadline and dependency rules.",
+          suggestedOrder: index + 1,
+        })
+      ),
+      summary:
+        "Atlas used its local planning rules because AI ordering was unavailable.",
+    };
 
-    console.log(
-      "Sending tasks to Gemini planner..."
-    );
+    if (apiKey) {
+      try {
+        const ai =
+          new GoogleGenAI({
+            apiKey,
+          });
 
-    const response =
-      await ai.models.generateContent(
-        {
-          model:
-            "gemini-3.6-flash",
+        console.log(
+          "Sending tasks to Gemini planner..."
+        );
 
-          contents: `
+        const response =
+          await ai.models.generateContent(
+            {
+              model:
+                "gemini-2.5-flash",
+
+              contents: `
 You are Atlas, an intelligent personal productivity planner.
 
 Today's date:
@@ -1353,6 +1406,9 @@ IMPORTANT RULES:
 
 18. Do not calculate available-time scheduling. The server will handle that separately.
 
+RELEVANT USER MEMORY:
+${memories.join("\n") || "No saved memories."}
+
 USER TASKS:
 
 ${JSON.stringify(
@@ -1373,91 +1429,100 @@ Return exactly:
   ],
   "summary": "Short explanation of the recommended order."
 }
-          `,
+              `,
 
-          config: {
-            responseMimeType:
-              "application/json",
+              config: {
+                responseMimeType:
+                  "application/json",
 
-            responseSchema: {
-              type: "object",
+                responseSchema: {
+                  type: "object",
 
-              properties: {
-                plan: {
-                  type: "array",
+                  properties: {
+                    plan: {
+                      type: "array",
 
-                  items: {
-                    type: "object",
+                      items: {
+                        type: "object",
 
-                    properties: {
-                      id: {
-                        type: "number",
-                      },
+                        properties: {
+                          id: {
+                            type: "number",
+                          },
 
-                      reason: {
-                        type: "string",
-                      },
+                          reason: {
+                            type: "string",
+                          },
 
-                      suggestedOrder: {
-                        type: "number",
+                          suggestedOrder: {
+                            type: "number",
+                          },
+                        },
+
+                        required: [
+                          "id",
+                          "reason",
+                          "suggestedOrder",
+                        ],
                       },
                     },
 
-                    required: [
-                      "id",
-                      "reason",
-                      "suggestedOrder",
-                    ],
+                    summary: {
+                      type: "string",
+                    },
                   },
-                },
 
-                summary: {
-                  type: "string",
+                  required: [
+                    "plan",
+                    "summary",
+                  ],
                 },
               },
+            }
+          );
 
-              required: [
-                "plan",
-                "summary",
-              ],
-            },
-          },
+        const outputText =
+          response.text ??
+          "";
+
+        if (outputText) {
+          try {
+            const parsed =
+              JSON.parse(
+                outputText
+              ) as AIPlannerResponse;
+
+            if (
+              Array.isArray(
+                parsed.plan
+              )
+            ) {
+              aiResult = parsed;
+            } else {
+              console.warn(
+                "Gemini returned an invalid plan array. Using local fallback."
+              );
+            }
+          } catch (parseError) {
+            console.warn(
+              "Gemini returned invalid JSON. Using local fallback.",
+              parseError
+            );
+          }
+        } else {
+          console.warn(
+            "Gemini returned an empty planner response. Using local fallback."
+          );
         }
-      );
-
-    const outputText =
-      response.text ??
-      "";
-
-    if (
-      !outputText
-    ) {
-      throw new Error(
-        "Gemini returned an empty planner response."
-      );
-    }
-
-    let aiResult:
-      AIPlannerResponse;
-
-    try {
-      aiResult =
-        JSON.parse(
-          outputText
-        ) as AIPlannerResponse;
-    } catch {
-      throw new Error(
-        "Atlas returned invalid planner JSON."
-      );
-    }
-
-    if (
-      !Array.isArray(
-        aiResult.plan
-      )
-    ) {
-      throw new Error(
-        "Invalid planner response."
+      } catch (aiError) {
+        console.warn(
+          "Gemini planner unavailable. Continuing with local Atlas planner.",
+          aiError
+        );
+      }
+    } else {
+      console.warn(
+        "GEMINI_API_KEY is not configured. Continuing with local Atlas planner."
       );
     }
 
@@ -1631,7 +1696,8 @@ Return exactly:
         optimizeTasks(
           activeTasks,
           availableMinutes,
-          todayISO
+          todayISO,
+          memories
         );
     }
 

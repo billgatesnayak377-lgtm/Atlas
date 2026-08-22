@@ -20,7 +20,32 @@ type AtlasTask = {
   duration: number;
   category: Category;
   dueDate: string | null;
+  preferredTime?: PreferredTime;
+  recurrence?: Recurrence;
+  reminder?: string;
 };
+
+type PreferredTime =
+  | "anytime"
+  | "morning"
+  | "afternoon"
+  | "evening";
+
+type Recurrence =
+  | "none"
+  | "daily"
+  | "weekdays"
+  | "weekly";
+
+type Preferences = {
+  defaultPriority?: Priority;
+  defaultDuration?: number;
+  defaultCategory?: Category;
+  defaultPreferredTime?: PreferredTime;
+  defaultRecurrence?: Recurrence;
+  defaultReminder?: string;
+};
+
 
 function formatDate(date: Date): string {
   const year = date.getFullYear();
@@ -306,6 +331,11 @@ export default async function handler(
     const userInput =
       req.body?.input;
 
+    const preferences = (req.body?.preferences ?? {}) as Preferences;
+    const memories = Array.isArray(req.body?.memories)
+      ? req.body.memories.filter((item: unknown) => typeof item === "string").slice(0, 12)
+      : [];
+
     if (
       typeof userInput !== "string" ||
       userInput.trim() === ""
@@ -421,6 +451,19 @@ Due date:
 - If no due date is given, return null.
 - Do not invent a deadline.
 
+Preferred time:
+- Return exactly anytime, morning, afternoon, or evening.
+- Use an explicit time/daypart from the user when present; otherwise use the supplied default.
+
+Recurrence:
+- Return exactly none, daily, weekdays, or weekly.
+- Only set recurrence when the user explicitly asks for repetition; otherwise use the supplied default.
+
+Reminder:
+- Return a 24-hour HH:MM time when explicitly requested or when a supplied default exists.
+- Otherwise return an empty string.
+- Never invent a reminder time.
+
 Examples:
 
 User:
@@ -451,6 +494,17 @@ Return three separate objects:
     "dueDate": "..."
   }
 ]
+
+DEFAULTS TO USE ONLY WHEN THE USER DID NOT EXPLICITLY SPECIFY A VALUE:
+- priority: ${preferences.defaultPriority ?? "medium"}
+- duration: ${preferences.defaultDuration ?? 30} minutes
+- category: ${preferences.defaultCategory ?? "other"}
+- preferred time: ${preferences.defaultPreferredTime ?? "anytime"}
+- recurrence: ${preferences.defaultRecurrence ?? "none"}
+- reminder: ${preferences.defaultReminder || "none"}
+
+MEMORY CONTEXT (use only when relevant; explicit user instructions always win):
+${memories.join("\n") || "No saved memories."}
 
 USER REQUEST:
 ${userInput.trim()}
@@ -499,6 +553,17 @@ ${JSON.stringify(segments, null, 2)}
                     "null",
                   ],
                 },
+                preferredTime: {
+                  type: "string",
+                  enum: ["anytime", "morning", "afternoon", "evening"],
+                },
+                recurrence: {
+                  type: "string",
+                  enum: ["none", "daily", "weekdays", "weekly"],
+                },
+                reminder: {
+                  type: "string",
+                },
               },
               required: [
                 "title",
@@ -506,6 +571,9 @@ ${JSON.stringify(segments, null, 2)}
                 "duration",
                 "category",
                 "dueDate",
+                "preferredTime",
+                "recurrence",
+                "reminder",
               ],
             },
           },
@@ -600,6 +668,37 @@ ${JSON.stringify(segments, null, 2)}
                     explicitDueDate,
                 }
               : {}),
+
+            preferredTime:
+              task.preferredTime ??
+              preferences.defaultPreferredTime ??
+              "anytime",
+
+            recurrence:
+              task.recurrence ??
+              preferences.defaultRecurrence ??
+              "none",
+
+            reminder:
+              typeof task.reminder === "string"
+                ? task.reminder
+                : preferences.defaultReminder || undefined,
+
+            priority:
+              task.priority ??
+              preferences.defaultPriority ??
+              "medium",
+
+            duration:
+              explicitDuration ??
+              task.duration ??
+              preferences.defaultDuration ??
+              30,
+
+            category:
+              task.category ??
+              preferences.defaultCategory ??
+              "other",
           };
         }
       );
