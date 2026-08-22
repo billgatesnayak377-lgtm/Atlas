@@ -54,6 +54,8 @@ type PlannedTask = {
   reminder?: string;
   reason: string;
   suggestedOrder: number;
+  startTime?: string;
+  endTime?: string;
 };
 
 type PlannerResponse = {
@@ -366,6 +368,14 @@ function getRecurrenceLabel(
     option?.label ??
     "Does not repeat"
   );
+}
+
+function getScheduleTimeRange(task: PlannedTask): string {
+  if (!task.startTime || !task.endTime) {
+    return "Time not assigned";
+  }
+
+  return `${task.startTime} – ${task.endTime}`;
 }
 
 /* -------------------------------------------------------
@@ -930,108 +940,180 @@ export default function Dashboard() {
   ----------------------------------------------------- */
 
   async function createSmartTask() {
-    const input =
-      smartTask.trim();
+    const input = smartTask.trim();
 
-    if (
-      !input ||
-      isAiLoading
-    ) {
+    if (!input || isAiLoading) {
       return;
     }
 
     setIsAiLoading(true);
 
     try {
-      const response =
-        await fetch(
-          "/api/task-assistant",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              input,
-            }),
-          }
-        );
+      const response = await fetch(
+        "/api/task-assistant",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            input,
+          }),
+        }
+      );
 
       const data: {
+        tasks?: Array<Partial<Task>>;
         title?: string;
         priority?: Priority;
         duration?: number;
         category?: Category;
-        dueDate?:
-          | string
-          | null;
+        dueDate?: string | null;
         error?: string;
-      } =
-        await response.json();
+      } = await response.json();
+
+      console.log(
+        "Atlas Task Assistant response:",
+        data
+      );
 
       if (!response.ok) {
         throw new Error(
           data.error ||
-            "Atlas could not understand the task."
+            `Task Assistant request failed (${response.status}).`
         );
       }
 
-      if (
-        typeof data.title !==
-          "string" ||
-        !data.title.trim()
+      /*
+       * NEW MULTI-TASK RESPONSE
+       *
+       * The new API returns:
+       *
+       * {
+       *   tasks: [
+       *     {
+       *       title,
+       *       priority,
+       *       duration,
+       *       category,
+       *       dueDate
+       *     },
+       *     ...
+       *   ]
+       * }
+       */
+      let aiTasks: Array<Partial<Task>> = [];
+
+      if (Array.isArray(data.tasks)) {
+        aiTasks = data.tasks;
+      } else if (
+        typeof data.title === "string" &&
+        data.title.trim()
       ) {
+        /*
+         * Backward compatibility with the old API response.
+         * This lets the Dashboard continue working even if an
+         * older deployed API is temporarily being used.
+         */
+        aiTasks = [
+          {
+            title: data.title,
+            priority: data.priority,
+            duration: data.duration,
+            category: data.category,
+            dueDate: data.dueDate,
+          },
+        ];
+      }
+
+      if (aiTasks.length === 0) {
         throw new Error(
-          "Atlas returned an invalid task."
+          "Atlas returned no tasks. Check the Task Assistant API response in the browser console."
         );
       }
 
-      const newTask: Task =
-        normalizeTask(
-          {
-            id: Date.now(),
-            title:
-              data.title.trim(),
-            completed: false,
-            priority:
-              data.priority,
-            duration:
-              data.duration,
-            category:
-              data.category,
-            dueDate:
-              typeof data.dueDate ===
-              "string"
-                ? data.dueDate
-                : undefined,
-            dependencyIds: [],
-            preferredTime:
-              "anytime",
-            recurrence:
-              "none",
-            reminder:
-              undefined,
-          },
-          Date.now()
+      const baseId = Date.now();
+
+      const newTasks: Task[] = aiTasks
+        .map(
+          (
+            task: Partial<Task>,
+            index: number
+          ) =>
+            normalizeTask(
+              {
+                id: baseId + index,
+                title:
+                  typeof task.title === "string"
+                    ? task.title.trim()
+                    : "Untitled task",
+                completed: false,
+                priority: task.priority,
+                duration: task.duration,
+                category: task.category,
+                dueDate:
+                  typeof task.dueDate === "string"
+                    ? task.dueDate
+                    : undefined,
+                dependencyIds: [],
+                preferredTime:
+                  normalizePreferredTime(
+                    task.preferredTime
+                  ),
+                recurrence:
+                  normalizeRecurrence(
+                    task.recurrence
+                  ),
+                reminder:
+                  typeof task.reminder === "string"
+                    ? task.reminder
+                    : undefined,
+              },
+              baseId + index
+            )
+        )
+        .filter(
+          (task: Task) =>
+            task.title !== "Untitled task"
         );
 
+      if (newTasks.length === 0) {
+        throw new Error(
+          "Atlas returned tasks without valid titles."
+        );
+      }
+
+      /*
+       * Add ALL tasks returned by Gemini in one state update.
+       * This is the key change from the old single-task flow.
+       */
       setTasks(
         (current: Task[]) => [
           ...current,
-          newTask,
+          ...newTasks,
         ]
       );
 
       setSmartTask("");
+
+      console.log(
+        `Atlas created ${newTasks.length} task(s):`,
+        newTasks
+      );
     } catch (error) {
       console.error(
         "Atlas Task Assistant error:",
         error
       );
 
+      /*
+       * Show the real error while testing instead of hiding it
+       * behind the old generic message.
+       */
       window.alert(
-        "Atlas couldn't understand that task. Please try again."
+        error instanceof Error
+          ? error.message
+          : "Atlas Task Assistant failed."
       );
     } finally {
       setIsAiLoading(false);
@@ -1624,7 +1706,7 @@ export default function Dashboard() {
 
               <div>
                 <h3 className="text-xl font-semibold text-purple-300">
-                  🧠 Your Daily Plan
+                  🧠 Your Smart Schedule
                 </h3>
 
                 <p className="text-sm text-slate-400 mt-1">
@@ -1697,13 +1779,21 @@ export default function Dashboard() {
 
                       <div className="flex-1">
 
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-start justify-between gap-3">
 
-                          <h4 className="text-white font-medium">
-                            {
-                              task.title
-                            }
-                          </h4>
+                          <div>
+                            {task.startTime && task.endTime && (
+                              <div className="text-sm font-semibold text-sky-300 mb-1">
+                                ⏰ {getScheduleTimeRange(task)}
+                              </div>
+                            )}
+
+                            <h4 className="text-white font-medium">
+                              {
+                                task.title
+                              }
+                            </h4>
+                          </div>
 
                           <span
                             className={`text-xs px-2 py-1 rounded-lg ${
@@ -1771,6 +1861,15 @@ export default function Dashboard() {
                               </span>
                             )}
 
+                        </div>
+
+                        <div className="mt-3 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2">
+                          <div className="text-xs text-slate-500 uppercase tracking-wide">
+                            Scheduled block
+                          </div>
+                          <div className="text-sm text-sky-300 mt-1">
+                            {getScheduleTimeRange(task)} · {formatDuration(task.duration)}
+                          </div>
                         </div>
 
                         <p className="text-sm text-slate-400 mt-2">

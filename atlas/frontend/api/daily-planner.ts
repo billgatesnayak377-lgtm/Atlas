@@ -71,6 +71,8 @@ type PlannedTask = {
   reminder?: string;
   reason: string;
   suggestedOrder: number;
+  startTime: string;
+  endTime: string;
 };
 
 type PlannerResponse = {
@@ -940,6 +942,59 @@ function topologicalSort(
 }
 
 /* =======================================================
+   SMART SCHEDULE
+======================================================= */
+
+function roundUpToFiveMinutes(date: Date): Date {
+  const result = new Date(date);
+  result.setSeconds(0, 0);
+  const remainder = result.getMinutes() % 5;
+  if (remainder !== 0) {
+    result.setMinutes(result.getMinutes() + (5 - remainder));
+  }
+  return result;
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function scheduleTasks(
+  tasks: PlannedTask[],
+  startDate: Date = new Date()
+): PlannedTask[] {
+  let cursor = roundUpToFiveMinutes(startDate);
+  let workSinceBreak = 0;
+
+  return tasks.map((task: PlannedTask, index: number) => {
+    // Add a short recovery break after roughly two hours of continuous work.
+    // The break is represented by a gap in the schedule and is not counted
+    // against Atlas' selected task minutes.
+    if (index > 0 && workSinceBreak >= 120) {
+      cursor = new Date(cursor.getTime() + 10 * 60 * 1000);
+      workSinceBreak = 0;
+    }
+
+    const start = new Date(cursor);
+    const end = new Date(
+      start.getTime() + task.duration * 60 * 1000
+    );
+
+    cursor = end;
+    workSinceBreak += task.duration;
+
+    return {
+      ...task,
+      startTime: formatTime(start),
+      endTime: formatTime(end),
+    };
+  });
+}
+
+/* =======================================================
    CREATE PLANNED TASK
 ======================================================= */
 
@@ -995,6 +1050,9 @@ function createPlannedTask(
 
     suggestedOrder:
       order,
+
+    startTime: "",
+    endTime: "",
   };
 }
 
@@ -1631,7 +1689,7 @@ Return exactly:
        BUILD FINAL PLAN
     --------------------------------------------------- */
 
-    const finalPlan:
+    const orderedPlan:
       PlannedTask[] =
       orderedSelectedTasks.map(
         (
@@ -1649,6 +1707,8 @@ Return exactly:
             index + 1
           )
       );
+
+    const finalPlan = scheduleTasks(orderedPlan);
 
     /* ---------------------------------------------------
        CALCULATE TOTALS

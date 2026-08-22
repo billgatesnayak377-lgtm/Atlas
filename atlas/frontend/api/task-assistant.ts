@@ -22,94 +22,60 @@ type AtlasTask = {
   dueDate: string | null;
 };
 
-/* -------------------------------------------------------
-   Date helpers
-------------------------------------------------------- */
-
 function formatDate(date: Date): string {
   const year = date.getFullYear();
-  const month = String(
-    date.getMonth() + 1
-  ).padStart(2, "0");
-  const day = String(
-    date.getDate()
-  ).padStart(2, "0");
-
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
-function addDays(
-  date: Date,
-  days: number
-): Date {
+function addDays(date: Date, days: number): Date {
   const result = new Date(date);
-  result.setDate(
-    result.getDate() + days
-  );
-
+  result.setDate(result.getDate() + days);
   return result;
 }
 
+/*
+ * Extract a due date from ONE task segment.
+ * This is deliberately run per segment so that:
+ *
+ *   Task A tomorrow; Task B in 3 days
+ *
+ * gets two different dates.
+ */
 function getDeterministicDueDate(
   input: string,
   today: Date
 ): string | null | undefined {
   const text = input.toLowerCase().trim();
 
-  if (
-    /\b(no due date|no deadline|without deadline)\b/i.test(
-      text
-    )
-  ) {
+  if (/\b(no due date|no deadline|without deadline)\b/i.test(text)) {
     return null;
   }
 
-  // Today
   if (/\btoday\b/i.test(text)) {
     return formatDate(today);
   }
 
-  // Day after tomorrow
-  if (
-    /\bday after tomorrow\b/i.test(text)
-  ) {
-    return formatDate(
-      addDays(today, 2)
-    );
+  if (/\bday after tomorrow\b/i.test(text)) {
+    return formatDate(addDays(today, 2));
   }
 
-  // Tomorrow
   if (/\btomorrow\b/i.test(text)) {
-    return formatDate(
-      addDays(today, 1)
-    );
+    return formatDate(addDays(today, 1));
   }
 
-  // In X days
-  const inDaysMatch = text.match(
-    /\bin\s+(\d+)\s+days?\b/i
-  );
+  const inDaysMatch = text.match(/\bin\s+(\d+)\s+days?\b/i);
 
   if (inDaysMatch) {
-    const days = Number(
-      inDaysMatch[1]
-    );
+    const days = Number(inDaysMatch[1]);
 
-    if (
-      days >= 0 &&
-      days <= 365
-    ) {
-      return formatDate(
-        addDays(today, days)
-      );
+    if (Number.isFinite(days) && days >= 0 && days <= 365) {
+      return formatDate(addDays(today, days));
     }
   }
 
-  // In one/two/three/etc. days
-  const wordNumbers: Record<
-    string,
-    number
-  > = {
+  const wordNumbers: Record<string, number> = {
     one: 1,
     two: 2,
     three: 3,
@@ -119,27 +85,20 @@ function getDeterministicDueDate(
     seven: 7,
   };
 
-  const inWordDaysMatch =
-    text.match(
-      /\bin\s+(one|two|three|four|five|six|seven)\s+days?\b/i
-    );
+  const inWordDaysMatch = text.match(
+    /\bin\s+(one|two|three|four|five|six|seven)\s+days?\b/i
+  );
 
   if (inWordDaysMatch) {
     return formatDate(
       addDays(
         today,
-        wordNumbers[
-          inWordDaysMatch[1].toLowerCase()
-        ]
+        wordNumbers[inWordDaysMatch[1].toLowerCase()]
       )
     );
   }
 
-  // Weekdays
-  const weekdays: Record<
-    string,
-    number
-  > = {
+  const weekdays: Record<string, number> = {
     sunday: 0,
     monday: 1,
     tuesday: 2,
@@ -149,135 +108,83 @@ function getDeterministicDueDate(
     saturday: 6,
   };
 
-  for (const [
-    dayName,
-    targetDay,
-  ] of Object.entries(weekdays)) {
-    const dayPattern =
-      new RegExp(
-        `\\b(?:this|next)\\s+${dayName}\\b`,
-        "i"
-      );
+  for (const [dayName, targetDay] of Object.entries(weekdays)) {
+    const dayPattern = new RegExp(
+      `\\b(?:this|next)\\s+${dayName}\\b`,
+      "i"
+    );
 
     if (dayPattern.test(text)) {
-      const currentDay =
-        today.getDay();
+      const currentDay = today.getDay();
 
       let difference =
-        (targetDay -
-          currentDay +
-          7) %
-        7;
+        (targetDay - currentDay + 7) % 7;
 
       if (
         difference === 0 ||
-        new RegExp(
-          `\\bnext\\s+${dayName}\\b`,
-          "i"
-        ).test(text)
+        new RegExp(`\\bnext\\s+${dayName}\\b`, "i").test(text)
       ) {
         if (difference === 0) {
           difference = 7;
         }
       }
 
-      return formatDate(
-        addDays(
-          today,
-          difference
-        )
-      );
+      return formatDate(addDays(today, difference));
     }
   }
 
-  // This weekend
-  if (
-    /\bthis weekend\b/i.test(text)
-  ) {
-    const currentDay =
-      today.getDay();
+  if (/\bthis weekend\b/i.test(text)) {
+    const currentDay = today.getDay();
 
     let daysUntilSaturday =
-      (6 -
-        currentDay +
-        7) %
-      7;
+      (6 - currentDay + 7) % 7;
 
-    if (
-      daysUntilSaturday === 0
-    ) {
+    if (daysUntilSaturday === 0) {
       daysUntilSaturday = 7;
     }
 
     return formatDate(
-      addDays(
-        today,
-        daysUntilSaturday
-      )
+      addDays(today, daysUntilSaturday)
     );
   }
 
-  // Next week
-  if (
-    /\bnext week\b/i.test(text)
-  ) {
-    return formatDate(
-      addDays(today, 7)
-    );
+  if (/\bnext week\b/i.test(text)) {
+    return formatDate(addDays(today, 7));
   }
 
   return undefined;
 }
 
-/* -------------------------------------------------------
-   Duration helper
-------------------------------------------------------- */
-
+/*
+ * Extract an explicit duration from ONE task segment.
+ */
 function getDeterministicDuration(
   input: string
 ): number | undefined {
   const text = input.toLowerCase();
 
-  // Example:
-  // "for 2 hours"
-  // "2 hours"
-  // "for 1.5 hrs"
-
-  const hoursMatch =
-    text.match(
-      /(?:for\s+)?(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i
-    );
+  const hoursMatch = text.match(
+    /(?:for\s+)?(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i
+  );
 
   if (hoursMatch) {
-    const hours = Number(
-      hoursMatch[1]
-    );
+    const hours = Number(hoursMatch[1]);
 
     if (
       Number.isFinite(hours) &&
       hours > 0 &&
       hours <= 24
     ) {
-      return Math.round(
-        hours * 60
-      );
+      return Math.round(hours * 60);
     }
   }
 
-  // Example:
-  // "for 30 minutes"
-  // "30 mins"
-  // "for 90 min"
-
-  const minutesMatch =
-    text.match(
-      /(?:for\s+)?(\d+)\s*(?:minutes?|mins?|min|m)\b/i
-    );
+  const minutesMatch = text.match(
+    /(?:for\s+)?(\d+)\s*(?:minutes?|mins?|min|m)\b/i
+  );
 
   if (minutesMatch) {
-    const minutes = Number(
-      minutesMatch[1]
-    );
+    const minutes = Number(minutesMatch[1]);
 
     if (
       Number.isFinite(minutes) &&
@@ -291,9 +198,84 @@ function getDeterministicDuration(
   return undefined;
 }
 
-/* -------------------------------------------------------
-   Main API handler
-------------------------------------------------------- */
+/*
+ * Split obvious multi-task input before sending it to Gemini.
+ *
+ * Semicolons/new lines are the strongest task separators.
+ * Gemini is still instructed to split tasks if the user uses
+ * natural language such as "and then".
+ */
+function splitTaskSegments(input: string): string[] {
+  const segments = input
+    .split(/[;\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return segments.length > 0 ? segments : [input.trim()];
+}
+
+function normalizeTask(
+  task: Partial<AtlasTask>
+): AtlasTask {
+  const validPriorities: Priority[] = [
+    "high",
+    "medium",
+    "low",
+  ];
+
+  const validCategories: Category[] = [
+    "work",
+    "study",
+    "health",
+    "personal",
+    "finance",
+    "other",
+  ];
+
+  const priority = validPriorities.includes(
+    task.priority as Priority
+  )
+    ? (task.priority as Priority)
+    : "medium";
+
+  const category = validCategories.includes(
+    task.category as Category
+  )
+    ? (task.category as Category)
+    : "other";
+
+  let duration =
+    typeof task.duration === "number" &&
+    Number.isFinite(task.duration) &&
+    task.duration > 0
+      ? Math.round(task.duration)
+      : 30;
+
+  duration = Math.min(
+    Math.max(duration, 5),
+    1440
+  );
+
+  const title =
+    typeof task.title === "string" &&
+    task.title.trim()
+      ? task.title.trim()
+      : "Untitled task";
+
+  const dueDate =
+    typeof task.dueDate === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate)
+      ? task.dueDate
+      : null;
+
+  return {
+    title,
+    priority,
+    duration,
+    category,
+    dueDate,
+  };
+}
 
 export default async function handler(
   req: VercelRequest,
@@ -325,8 +307,7 @@ export default async function handler(
       req.body?.input;
 
     if (
-      typeof userInput !==
-        "string" ||
+      typeof userInput !== "string" ||
       userInput.trim() === ""
     ) {
       return res.status(400).json({
@@ -348,73 +329,64 @@ export default async function handler(
         }
       );
 
-    /*
-      Calculate dates ourselves.
-    */
-    const deterministicDueDate =
-      getDeterministicDueDate(
-        userInput,
-        today
-      );
-
-    /*
-      Calculate duration ourselves when
-      the user explicitly gives one.
-    */
-    const deterministicDuration =
-      getDeterministicDuration(
-        userInput
-      );
+    const segments =
+      splitTaskSegments(userInput);
 
     console.log(
-      "Deterministic due date:",
-      deterministicDueDate
-    );
-
-    console.log(
-      "Deterministic duration:",
-      deterministicDuration
+      "Task segments:",
+      segments
     );
 
     const ai = new GoogleGenAI({
       apiKey,
     });
 
-    console.log(
-      "Sending request to Gemini..."
-    );
-
+    /*
+     * Ask Gemini to return an ARRAY.
+     *
+     * This is the important change from the previous version:
+     * the old API explicitly requested ONE task.
+     */
     const response =
-      await ai.models.generateContent(
-        {
-          model:
-            "gemini-3.6-flash",
+      await ai.models.generateContent({
+        model: "gemini-3.6-flash",
 
-          contents: `
+        contents: `
 You are Atlas, an intelligent personal task assistant.
 
-Today's date is:
-
+Today's date:
 ${todayString}
 
-Convert the user's request into ONE structured task.
+The user may describe ONE OR MULTIPLE tasks in one message.
 
-Return exactly these fields:
+Your job is to identify EVERY distinct actionable task.
 
-title
-priority
-duration
-category
-dueDate
+IMPORTANT:
+- Return one object for every distinct task.
+- Never combine two different tasks into one object.
+- Never omit a task.
+- Do not invent tasks.
+- If tasks are separated by semicolons or new lines, treat each segment as a separate task unless it is clearly just extra information about the same task.
+- If the user uses natural language such as "and", "also", or "then" to list separate actions, create separate task objects.
+- Preserve the actual task/action in the title.
+- Remove duration, date, and priority phrases from the title.
+- Keep each task's own duration and due date.
+- Do not copy a duration or due date from one task to another.
 
 Priority must be exactly:
-
 high
 medium
 low
 
-Category must be exactly one of:
+Priority rules:
+- urgent = high
+- critical = high
+- important = high
+- high priority = high
+- low priority = low
+- otherwise = medium
 
+Category must be exactly one of:
 work
 study
 health
@@ -422,117 +394,83 @@ personal
 finance
 other
 
-Rules for priority:
+Category rules:
+- studying, GATE preparation, exams, learning = study
+- gym, exercise, workout, health = health
+- work, reports, projects, meetings = work
+- money, bills, payments, recharges = finance
+- personal errands and personal activities = personal
+- everything else = other
 
-- urgent means high
-- critical means high
-- important means high
-- high priority means high
-- low priority means low
-- otherwise use medium
-
-Rules for duration:
-
+Duration:
 - Return duration in MINUTES.
-- If the user explicitly gives a duration, use it.
-- "2 hours" = 120
-- "1.5 hours" = 90
-- "30 minutes" = 30
-- "90 minutes" = 90
+- If the user explicitly gives a duration for a task, use it.
+- 2 hours = 120
+- 1.5 hours = 90
+- 30 minutes = 30
+- 90 minutes = 90
 - If no duration is given, estimate a realistic duration.
-- Do not return zero.
-- Keep estimates reasonable.
+- Never return zero.
 
-Rules for category:
-
-- Studying, GATE preparation, exams, learning = study
-- Gym, exercise, workout, health = health
-- Work, reports, projects, meetings = work
-- Money, bills, payments = finance
-- Personal errands and personal activities = personal
-- Everything else = other
-
-Rules for title:
-
-- Remove priority phrases.
-- Remove date phrases.
-- Remove duration phrases.
-- Keep the actual task/action.
-- Do not invent information.
-
-Rules for dueDate:
-
+Due date:
 - Return YYYY-MM-DD.
-- If there is no due date, return null.
+- "today" means today's date.
+- "tomorrow" means one day after today.
+- "day after tomorrow" means two days after today.
+- "in 3 days" means three days after today.
+- If no due date is given, return null.
 - Do not invent a deadline.
 
 Examples:
 
 User:
-Study GATE for 2 hours tomorrow
+Study GATE for 2 hours tomorrow; Finish BESS report for 3 hours next Friday, urgent; Go to gym for 1 hour tomorrow
 
-Return:
-{
-  "title": "Study GATE",
-  "priority": "medium",
-  "duration": 120,
-  "category": "study",
-  "dueDate": "YYYY-MM-DD"
-}
+Return three separate objects:
 
-User:
-Finish my BESS report for 3 hours next Friday, urgent
+[
+  {
+    "title": "Study GATE",
+    "priority": "medium",
+    "duration": 120,
+    "category": "study",
+    "dueDate": "..."
+  },
+  {
+    "title": "Finish BESS report",
+    "priority": "high",
+    "duration": 180,
+    "category": "work",
+    "dueDate": "..."
+  },
+  {
+    "title": "Go to gym",
+    "priority": "medium",
+    "duration": 60,
+    "category": "health",
+    "dueDate": "..."
+  }
+]
 
-Return:
-{
-  "title": "Finish my BESS report",
-  "priority": "high",
-  "duration": 180,
-  "category": "work",
-  "dueDate": "YYYY-MM-DD"
-}
-
-User:
-Go to gym for 1 hour tomorrow
-
-Return:
-{
-  "title": "Go to gym",
-  "priority": "medium",
-  "duration": 60,
-  "category": "health",
-  "dueDate": "YYYY-MM-DD"
-}
-
-User:
-Read research paper
-
-Return:
-{
-  "title": "Read research paper",
-  "priority": "medium",
-  "duration": 30,
-  "category": "study",
-  "dueDate": null
-}
-
-User request:
-
+USER REQUEST:
 ${userInput.trim()}
-          `,
 
-          config: {
-            responseMimeType:
-              "application/json",
+TASK SEGMENTS DETECTED:
+${JSON.stringify(segments, null, 2)}
+        `,
 
-            responseSchema: {
+        config: {
+          responseMimeType:
+            "application/json",
+
+          responseSchema: {
+            type: "array",
+            items: {
               type: "object",
-
               properties: {
                 title: {
                   type: "string",
                 },
-
                 priority: {
                   type: "string",
                   enum: [
@@ -541,11 +479,9 @@ ${userInput.trim()}
                     "low",
                   ],
                 },
-
                 duration: {
                   type: "number",
                 },
-
                 category: {
                   type: "string",
                   enum: [
@@ -557,7 +493,6 @@ ${userInput.trim()}
                     "other",
                   ],
                 },
-
                 dueDate: {
                   type: [
                     "string",
@@ -565,7 +500,6 @@ ${userInput.trim()}
                   ],
                 },
               },
-
               required: [
                 "title",
                 "priority",
@@ -575,8 +509,8 @@ ${userInput.trim()}
               ],
             },
           },
-        }
-      );
+        },
+      });
 
     console.log(
       "Gemini response received."
@@ -596,111 +530,97 @@ ${userInput.trim()}
       );
     }
 
-    const result =
-      JSON.parse(
-        outputText
-      ) as AtlasTask;
+    const parsed: unknown =
+      JSON.parse(outputText);
 
-    /*
-      Override Gemini's date when our
-      deterministic parser recognized one.
-    */
-    if (
-      deterministicDueDate !==
-      undefined
-    ) {
-      result.dueDate =
-        deterministicDueDate;
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        "Gemini returned an invalid task list."
+      );
+    }
+
+    const results: AtlasTask[] =
+      parsed
+        .map((task) =>
+          normalizeTask(
+            task as Partial<AtlasTask>
+          )
+        )
+        .filter(
+          (task) =>
+            task.title !==
+            "Untitled task"
+        );
+
+    if (results.length === 0) {
+      throw new Error(
+        "Gemini did not return any valid tasks."
+      );
     }
 
     /*
-      Override Gemini's duration when
-      the user explicitly specified one.
-    */
-    if (
-      deterministicDuration !==
-      undefined
-    ) {
-      result.duration =
-        deterministicDuration;
-    }
+     * Deterministic corrections PER SEGMENT.
+     *
+     * This guarantees that explicit durations/dates
+     * are not accidentally shared between tasks.
+     */
+    const correctedResults =
+      results.map(
+        (task, index) => {
+          const segment =
+            segments[index] ??
+            userInput;
 
-    /*
-      Validate priority.
-    */
-    if (
-      result.priority !== "high" &&
-      result.priority !== "medium" &&
-      result.priority !== "low"
-    ) {
-      result.priority =
-        "medium";
-    }
+          const explicitDuration =
+            getDeterministicDuration(
+              segment
+            );
 
-    /*
-      Validate category.
-    */
-    const validCategories:
-      Category[] = [
-        "work",
-        "study",
-        "health",
-        "personal",
-        "finance",
-        "other",
-      ];
+          const explicitDueDate =
+            getDeterministicDueDate(
+              segment,
+              today
+            );
 
-    if (
-      !validCategories.includes(
-        result.category
-      )
-    ) {
-      result.category =
-        "other";
-    }
+          return {
+            ...task,
 
-    /*
-      Validate duration.
-    */
-    if (
-      !Number.isFinite(
-        result.duration
-      ) ||
-      result.duration <= 0
-    ) {
-      result.duration = 30;
-    }
+            ...(explicitDuration !==
+            undefined
+              ? {
+                  duration:
+                    explicitDuration,
+                }
+              : {}),
 
-    result.duration = Math.round(
-      result.duration
-    );
-
-    /*
-      Keep duration within a
-      sensible range.
-    */
-    result.duration = Math.min(
-      Math.max(
-        result.duration,
-        5
-      ),
-      1440
-    );
-
-    /*
-      Clean title.
-    */
-    result.title =
-      result.title.trim();
+            ...(explicitDueDate !==
+            undefined
+              ? {
+                  dueDate:
+                    explicitDueDate,
+                }
+              : {}),
+          };
+        }
+      );
 
     console.log(
-      "Final Atlas task:",
-      result
+      "Final Atlas tasks:",
+      correctedResults
     );
 
-    return res.status(200).json(
-      result
-    );
+    /*
+     * New response contract:
+     *
+     * {
+     *   tasks: [...]
+     * }
+     *
+     * The dashboard should consume data.tasks.
+     */
+    return res.status(200).json({
+      tasks: correctedResults,
+    });
   } catch (error: unknown) {
     console.error(
       "ATLAS GEMINI ERROR:",
@@ -710,9 +630,7 @@ ${userInput.trim()}
     let message =
       "Atlas could not understand that task. Please try again.";
 
-    if (
-      error instanceof Error
-    ) {
+    if (error instanceof Error) {
       message = error.message;
     }
 
